@@ -1,5 +1,7 @@
 # GEIL — De Stoomboot
 
+**Play the game:** [https://crazycheese26.github.io/GeilHorror/](https://crazycheese26.github.io/GeilHorror/)
+
 A first-person stealth horror game set in the dark corridors of Sinterklaas'
 steamboat. Mr. Geil wants to eat you. Five anime body pillows will change his
 mind. The boat is dealt fresh every run.
@@ -180,6 +182,8 @@ python3 -m http.server 8000
 
 Push the folder, then **Settings → Pages → Deploy from a branch**, pick your
 branch and `/ (root)`. No build step.
+
+Play the live version at [https://crazycheese26.github.io/GeilHorror/](https://crazycheese26.github.io/GeilHorror/).
 
 ---
 
