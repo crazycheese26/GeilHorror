@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geil the Game - De Stoomboot van Sinterklaas</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="game-container">
+    <!-- 3D WebGL Canvas -->
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Retro CRT Scanlines & Horror Vignette Overlays -->
+    <div id="static-overlay"></div>
+    <div id="horror-vignette"></div>
+    <div id="crosshair"></div>
+
+    <!-- Pillow Discovery Popup Card -->
+    <div id="pillow-discovery"></div>
+
+    <!-- In-Game HUD -->
+    <div id="game-hud">
+      <!-- Objective Banner -->
+      <div id="objective-banner">
+        Collect 5 Anime Body Pillows from Sint Presents and bring them to the Tribute Altar!
+      </div>
+
+      <!-- Mr. Geil Proximity Alert -->
+      <div id="geil-warning">⚠️ MR. GEIL IS NEARBY! HE WANTS TO EAT YOU!</div>
+
+      <!-- Anime Body Pillows Inventory (Top Left) -->
+      <div id="pillow-inventory">
+        <div class="hud-label">Body Pillows</div>
+        <div id="pillow-counter">0 / 5</div>
+        <div id="pillow-list"></div>
+      </div>
+
+      <!-- Audio Mute Button -->
+      <button id="btn-mute">🔊 Audio: ON</button>
+
+
+
+      <!-- Stamina Meter (Bottom Left) -->
+      <div id="stamina-container">
+        <div class="stamina-label">Stamina [Shift: Run]</div>
+        <div id="stamina-track">
+          <div id="stamina-fill"></div>
+        </div>
+      </div>
+
+      <!-- Interaction Prompt -->
+      <div id="interaction-prompt">
+        <span class="key-tag">[E]</span> or <span class="key-tag">[Click]</span> Unwrap Present
+      </div>
+
+      <!-- Controls Hint (Bottom Right) -->
+      <div id="controls-hint">
+        <b>Controls:</b><br>
+        • W / S or ↑ / ↓ : Walk<br>
+        • A / D or ← / → : Turn Camera<br>
+        • Shift : Sprint<br>
+        • E / Space / Click : Interact
+      </div>
+    </div>
+
+    <!-- Title Screen Modal -->
+    <div id="title-screen" class="game-modal">
+      <h1 class="title-header">GEIL: THE GAME</h1>
+      <div class="title-sub">De Stoomboot van Sinterklaas (3D Horror)</div>
+
+      <img src="assets/geil_original.png" alt="Mr. Geil Monster Sketch" class="monster-preview">
+
+      <div class="story-box">
+        <p>You are trapped inside the dark, creaking corridors van de stoomboot van Sinterklaas.</p>
+        <p style="margin-top: 8px;">A horrifying creature known as <b>Mr. Geil</b> stalks the ship. <b>He needs to eat you to become EXTRA GEIL!</b></p>
+        <p style="margin-top: 8px;">How do you escape? Explore the corridors, unwrap the Sint presents to find <b>5 anime body pillows</b>, and place them as an offering on the <b>Tribute Altar</b>. Mr. Geil is very pleased with anime body pillows and will let you escape unharmed!</p>
+
+        <div class="controls-guide">
+          <b>Movement Controls:</b><br>
+          <b>W</b> and <b>S</b> (or <b>↑</b> / <b>↓</b>) to move forwards and backwards.<br>
+          <b>A</b> and <b>D</b> (or <b>←</b> / <b>→</b>) to turn the camera left or right.<br>
+          <b>Shift</b> to sprint &nbsp;|&nbsp; <b>E</b> / <b>Space</b> / <b>Click</b> to unwrap presents and use the Altar.
+        </div>
+      </div>
+
+      <button id="btn-start" class="btn-horror">ENTER THE STOOMBOOT</button>
+    </div>
+
+    <!-- Jumpscare Screen (Game Over) -->
+    <div id="jumpscare-screen" class="game-modal">
+      <img src="assets/geil_monster.png" alt="Mr. Geil Jumpscare" class="jumpscare-img">
+      <h1 class="jumpscare-title">MR. GEIL ATE YOU!</h1>
+      <p class="jumpscare-desc">He devoured you and became <b>EXTRA GEIL</b>...</p>
+      <button id="btn-retry" class="btn-horror">TRY AGAIN</button>
+    </div>
+
+    <!-- Victory Screen -->
+    <div id="victory-screen" class="game-modal">
+      <h1 class="victory-title">✨ YOU ESCAPED! ✨</h1>
+      <div class="victory-sub">De Stoomboot van Sinterklaas</div>
+
+      <div class="victory-box">
+        <p style="font-size: 20px; color: #ffd700; font-weight: bold; margin-bottom: 12px;">
+          MR. GEIL IS VERY PLEASED WITH THE ANIME BODY PILLOWS!
+        </p>
+        <p>The sacred offering of 5 soft dakimakura body pillows has pacified the beast. Mr. Geil is happily snuggling all of them in his quarters.</p>
+        <p style="margin-top: 10px;">The steamboat's escape gangway has opened, allowing you to flee into the cold Dutch night safely!</p>
+      </div>
+
+      <button id="btn-play-again" class="btn-victory">PLAY AGAIN</button>
+    </div>
+  </div>
+
+  <!-- Local Three.js with CDN Fallback -->
+  <script src="libs/three.min.js"></script>
+  <script>
+    if (typeof THREE === 'undefined') {
+      document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+    }
+  </script>
+
+  <!-- Main Game Orchestrator -->
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
