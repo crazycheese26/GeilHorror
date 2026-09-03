@@ -1,5 +1,5 @@
 // Mr. Geil Enemy AI: Stalks through the dark corridors to eat you and become EXTRA GEIL!
-// Uses the user's sketch as an eerie animated 3D billboard sprite with glowing eyes
+// Uses the original uploaded sketch as an animated 3D horror entity with corridor pathfinding
 
 import { horrorAudio } from './audio.js';
 
@@ -9,15 +9,17 @@ export class GeilEnemy {
     this.map = map;
 
     // Dimensions & Transform
-    this.width = 3.2;
-    this.height = 2.2;
-    this.x = 18 * map.cellSize;
-    this.z = 18 * map.cellSize;
+    this.width = 3.6;
+    this.height = 2.4;
+
+    // Starting Position: Open corridor tile (Col 7, Row 5) ~25m from player start
+    this.x = 7 * map.cellSize;
+    this.z = 5 * map.cellSize;
     this.y = 1.6;
 
     // Movement & AI
-    this.speed = 2.4;
-    this.chaseSpeed = 4.2;
+    this.speed = 2.8;
+    this.chaseSpeed = 4.6;
     this.state = 'PATROL'; // PATROL, STALK, CHASE
     this.targetWaypoint = null;
     this.changeTargetTimer = 0;
@@ -34,27 +36,25 @@ export class GeilEnemy {
   }
 
   buildSprite() {
-    // Load monster texture
+    // Load original monster drawing
     const textureLoader = new THREE.TextureLoader();
-    const monsterTexture = textureLoader.load('assets/geil_monster.png');
+    const monsterTexture = textureLoader.load('assets/geil_original.png');
     monsterTexture.magFilter = THREE.LinearFilter;
     monsterTexture.minFilter = THREE.LinearFilter;
 
-    // Billboard Quad
+    // 3D Billboard Quad displaying the original sketch
     const planeGeo = new THREE.PlaneGeometry(this.width, this.height);
     const planeMat = new THREE.MeshBasicMaterial({
       map: monsterTexture,
-      transparent: true,
-      side: THREE.DoubleSide,
-      alphaTest: 0.15
+      side: THREE.DoubleSide
     });
 
     this.sprite = new THREE.Mesh(planeGeo, planeMat);
     this.sprite.position.set(this.x, this.y, this.z);
     this.scene.add(this.sprite);
 
-    // Ominous deep red glow aura
-    this.glowLight = new THREE.PointLight(0xff1122, 1.8, 8);
+    // Ominous deep red glow aura that casts red light onto corridor walls
+    this.glowLight = new THREE.PointLight(0xff1122, 2.8, 16);
     this.glowLight.position.set(this.x, this.y, this.z);
     this.scene.add(this.glowLight);
   }
@@ -64,7 +64,7 @@ export class GeilEnemy {
     if (tile) {
       this.targetWaypoint = { x: tile.x, z: tile.z };
     }
-    this.changeTargetTimer = 5 + Math.random() * 8;
+    this.changeTargetTimer = 4 + Math.random() * 6;
   }
 
   update(delta, playerPos, onCatchPlayer) {
@@ -85,15 +85,15 @@ export class GeilEnemy {
 
     // Periodic eerie breathing / growl when relatively close
     const now = performance.now() / 1000;
-    if (distToPlayer < 16 && now - this.lastGrowlTime > 6) {
+    if (distToPlayer < 20 && now - this.lastGrowlTime > 5) {
       horrorAudio.playMonsterGrowl();
       this.lastGrowlTime = now + Math.random() * 3;
     }
 
     // AI State Machine
-    if (distToPlayer < 7.0) {
+    if (distToPlayer < 10.0) {
       this.state = 'CHASE';
-    } else if (distToPlayer < 18.0) {
+    } else if (distToPlayer < 28.0) {
       this.state = 'STALK';
     } else {
       this.state = 'PATROL';
@@ -110,9 +110,9 @@ export class GeilEnemy {
     } else if (this.state === 'STALK') {
       targetX = playerPos.x;
       targetZ = playerPos.z;
-      moveSpeed = this.speed * 1.25;
+      moveSpeed = this.speed * 1.35;
     } else {
-      // PATROL
+      // PATROL: actively wanders the corridors
       this.changeTargetTimer -= delta;
       if (this.changeTargetTimer <= 0 || !this.targetWaypoint) {
         this.pickNewWaypoint();
@@ -121,25 +121,30 @@ export class GeilEnemy {
       targetZ = this.targetWaypoint.z;
     }
 
-    // Move towards target
-    const toTargetX = targetX - this.x;
-    const toTargetZ = targetZ - this.z;
-    const distToTarget = Math.sqrt(toTargetX * toTargetX + toTargetZ * toTargetZ);
+    // Use corridor pathfinding (BFS) so Mr. Geil never gets stuck on walls
+    let nextStep = { x: targetX, z: targetZ };
+    if (distToPlayer > 1.8) {
+      nextStep = this.map.findPathNextStep(this.x, this.z, targetX, targetZ);
+    }
 
-    if (distToTarget > 0.3) {
-      const step = (moveSpeed * delta) / distToTarget;
-      const desiredX = this.x + toTargetX * step;
-      const desiredZ = this.z + toTargetZ * step;
+    const toStepX = nextStep.x - this.x;
+    const toStepZ = nextStep.z - this.z;
+    const distToStep = Math.sqrt(toStepX * toStepX + toStepZ * toStepZ);
 
-      const resolved = this.map.resolveCollision(this.x, this.z, desiredX, desiredZ, 0.7);
+    if (distToStep > 0.1) {
+      const step = (moveSpeed * delta) / distToStep;
+      const desiredX = this.x + toStepX * Math.min(step, 1.0);
+      const desiredZ = this.z + toStepZ * Math.min(step, 1.0);
+
+      const resolved = this.map.resolveCollision(this.x, this.z, desiredX, desiredZ, 0.6);
       this.x = resolved.x;
       this.z = resolved.z;
     }
 
-    // Animate sprite: billboard faces camera, slight head tilt and breathing scale
+    // Animate sprite: billboard faces camera, slight wobble and breathing scale
     const wobbleY = Math.sin(this.wobbleTime) * 0.12;
-    const tiltZ = Math.sin(this.wobbleTime * 0.7) * 0.15;
-    const pulseScale = 1.0 + Math.sin(this.wobbleTime * 2) * 0.05;
+    const tiltZ = Math.sin(this.wobbleTime * 0.7) * 0.12;
+    const pulseScale = 1.0 + Math.sin(this.wobbleTime * 2) * 0.04;
 
     this.sprite.position.set(this.x, this.y + wobbleY, this.z);
     this.sprite.rotation.set(0, 0, 0);
@@ -151,11 +156,11 @@ export class GeilEnemy {
     // Glow light follows
     if (this.glowLight) {
       this.glowLight.position.set(this.x, this.y + wobbleY, this.z);
-      this.glowLight.intensity = this.state === 'CHASE' ? 3.0 : 1.5 + Math.sin(this.wobbleTime * 3) * 0.5;
+      this.glowLight.intensity = this.state === 'CHASE' ? 3.5 : 2.0 + Math.sin(this.wobbleTime * 3) * 0.6;
     }
 
     // Catch condition: Mr. Geil eats you!
-    if (this.isDeadly && distToPlayer < 1.35) {
+    if (this.isDeadly && distToPlayer < 1.4) {
       if (onCatchPlayer) {
         onCatchPlayer();
       }
@@ -169,14 +174,14 @@ export class GeilEnemy {
 
     if (!vignette) return;
 
-    if (dist < 18.0) {
-      const intensity = Math.min(1.0, 1.0 - (dist / 18.0));
+    if (dist < 20.0) {
+      const intensity = Math.min(1.0, 1.0 - (dist / 20.0));
       vignette.style.opacity = (intensity * 0.85).toFixed(2);
       if (staticOverlay) {
-        staticOverlay.style.opacity = (intensity * 0.45).toFixed(2);
+        staticOverlay.style.opacity = (0.05 + intensity * 0.3).toFixed(2);
       }
 
-      if (dist < 8.0 && geilWarning) {
+      if (dist < 12.0 && geilWarning) {
         geilWarning.style.display = 'block';
         geilWarning.innerText = "⚠️ MR. GEIL IS EXTREMELY CLOSE! HE WANTS TO EAT YOU!";
       } else if (geilWarning) {
@@ -184,14 +189,14 @@ export class GeilEnemy {
       }
     } else {
       vignette.style.opacity = '0';
-      if (staticOverlay) staticOverlay.style.opacity = '0';
+      if (staticOverlay) staticOverlay.style.opacity = '0.05';
       if (geilWarning) geilWarning.style.display = 'none';
     }
   }
 
   resetPosition() {
-    this.x = 18 * this.map.cellSize;
-    this.z = 18 * this.map.cellSize;
+    this.x = 7 * this.map.cellSize;
+    this.z = 5 * this.map.cellSize;
     this.state = 'PATROL';
     this.isDeadly = true;
     this.pickNewWaypoint();
@@ -202,7 +207,7 @@ export class GeilEnemy {
     this.state = 'PACIFIED';
     if (this.glowLight) {
       this.glowLight.color.setHex(0xffdd66); // Golden warm satisfied aura!
-      this.glowLight.intensity = 3.5;
+      this.glowLight.intensity = 4.0;
     }
   }
 }

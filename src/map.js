@@ -288,4 +288,68 @@ export class SteamboatMap {
     const idx = Math.floor(Math.random() * this.walkableTiles.length);
     return this.walkableTiles[idx];
   }
+
+  // Find next step in grid towards target using Breadth-First Search (BFS)
+  findPathNextStep(startWorldX, startWorldZ, targetWorldX, targetWorldZ) {
+    const startC = Math.max(0, Math.min(this.cols - 1, Math.round(startWorldX / this.cellSize)));
+    const startR = Math.max(0, Math.min(this.rows - 1, Math.round(startWorldZ / this.cellSize)));
+    const targetC = Math.max(0, Math.min(this.cols - 1, Math.round(targetWorldX / this.cellSize)));
+    const targetR = Math.max(0, Math.min(this.rows - 1, Math.round(targetWorldZ / this.cellSize)));
+
+    if (startC === targetC && startR === targetR) {
+      return { x: targetWorldX, z: targetWorldZ };
+    }
+
+    const queue = [{ r: startR, c: startC }];
+    const visited = Array.from({ length: this.rows }, () => Array(this.cols).fill(null));
+    visited[startR][startC] = { r: startR, c: startC };
+
+    const dirs = [
+      { dr: -1, dc: 0 },
+      { dr: 1, dc: 0 },
+      { dr: 0, dc: -1 },
+      { dr: 0, dc: 1 }
+    ];
+
+    let found = false;
+
+    while (queue.length > 0) {
+      const curr = queue.shift();
+      if (curr.r === targetR && curr.c === targetC) {
+        found = true;
+        break;
+      }
+
+      for (let i = 0; i < dirs.length; i++) {
+        const nr = curr.r + dirs[i].dr;
+        const nc = curr.c + dirs[i].dc;
+
+        if (nr >= 0 && nr < this.rows && nc >= 0 && nc < this.cols) {
+          const val = this.grid[nr][nc];
+          const isWalkable = val !== 1 && val !== 2;
+          if (isWalkable && !visited[nr][nc]) {
+            visited[nr][nc] = { r: curr.r, c: curr.c };
+            queue.push({ r: nr, c: nc });
+          }
+        }
+      }
+    }
+
+    if (!found) {
+      return { x: targetWorldX, z: targetWorldZ };
+    }
+
+    // Backtrack from target to find the immediate next step after start
+    let curr = { r: targetR, c: targetC };
+    while (true) {
+      const parent = visited[curr.r][curr.c];
+      if (!parent) break;
+      if (parent.r === startR && parent.c === startC) {
+        return { x: curr.c * this.cellSize, z: curr.r * this.cellSize };
+      }
+      curr = parent;
+    }
+
+    return { x: targetWorldX, z: targetWorldZ };
+  }
 }
