@@ -1,223 +1,210 @@
-// Sint Presents & Anime Body Pillows (Dakimakura) System
-// Unwrap gifts left by Sinterklaas to find waifu body pillows to appease Mr. Geil!
+// Sint presents and the anime body pillows inside them.
+//
+// Opening one is the game's deliberate risk: it pins you in place for nearly
+// two seconds and tearing the paper is the loudest thing you can do.
 
 import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
+
+const REACH = 2.4;
+const UNWRAP_SECONDS = 1.7;
+const UNWRAP_NOISE_RADIUS = 30;
 
 export class ItemManager {
   constructor(scene, map) {
     this.scene = scene;
     this.map = map;
 
-    this.presents = [];
     this.pillows = TextureFactory.createAnimePillows();
+    this.presents = [];
+    this.inventory = [];
     this.collectedCount = 0;
     this.requiredCount = 5;
-    this.inventory = [];
 
-    this.presentWrapTexture = TextureFactory.createPresentWrap();
-    this.setupPresents();
+    this.progress = 0;
+    this.activeTarget = null;
+
+    // Fired by the game loop: (pillowData, worldX, worldZ).
+    this.onUnwrapped = null;
+
+    this.wrapTexture = TextureFactory.createPresentWrap();
+    this.haloTexture = TextureFactory.createBlobShadow();
+    this.disposables = [this.wrapTexture, this.haloTexture];
+    for (const p of this.pillows) this.disposables.push(p.texture);
+
+    this.buildPresents();
   }
 
-  setupPresents() {
-    const spawns = this.map.presentSpawns;
-    // Shuffle waifu pillows to assign uniquely
-    const shuffledPillows = [...this.pillows].sort(() => Math.random() - 0.5);
+  buildPresents() {
+    const shuffled = [...this.pillows].sort(() => Math.random() - 0.5);
 
-    spawns.forEach((spawn, idx) => {
-      const pillowData = shuffledPillows[idx % shuffledPillows.length];
-      const presentObj = this.createPresentMesh(spawn.x, spawn.z, pillowData, idx);
-      this.scene.add(presentObj.group);
-      this.presents.push(presentObj);
+    this.map.presentSpawns.forEach((spawn, idx) => {
+      const offset = this.map.offsetTowardWall(spawn.r, spawn.c, 0.95);
+      const x = spawn.x + offset.dx;
+      const z = spawn.z + offset.dz;
+      const present = this.createPresent(x, z, shuffled[idx % shuffled.length], idx);
+      this.scene.add(present.group);
+      this.presents.push(present);
     });
   }
 
-  createPresentMesh(x, z, pillowData, id) {
+  createPresent(x, z, pillowData, id) {
     const group = new THREE.Group();
-    group.position.set(x, 0.45, z);
+    group.position.set(x, 0, z);
+    group.rotation.y = Math.random() * Math.PI * 2;
 
-    // 1. Gift Box Base
-    const boxGeo = new THREE.BoxGeometry(0.9, 0.7, 0.9);
+    const boxGeo = new THREE.BoxGeometry(0.78, 0.6, 0.78);
     const boxMat = new THREE.MeshStandardMaterial({
-      map: this.presentWrapTexture,
-      roughness: 0.4,
-      metalness: 0.1
+      map: this.wrapTexture, roughness: 0.62, metalness: 0.05
     });
-    const boxMesh = new THREE.Mesh(boxGeo, boxMat);
-    boxMesh.castShadow = true;
-    group.add(boxMesh);
+    const box = new THREE.Mesh(boxGeo, boxMat);
+    box.position.y = 0.3;
+    box.castShadow = true;
+    box.receiveShadow = true;
+    group.add(box);
 
-    // 2. Gift Lid
-    const lidGeo = new THREE.BoxGeometry(0.96, 0.15, 0.96);
-    const lidMat = new THREE.MeshStandardMaterial({
-      color: 0xd4af37, // Gold ribbon top
-      roughness: 0.3,
-      metalness: 0.6
+    const ribbonMat = new THREE.MeshStandardMaterial({
+      color: 0xb8912f, roughness: 0.45, metalness: 0.55
     });
-    const lidMesh = new THREE.Mesh(lidGeo, lidMat);
-    lidMesh.position.y = 0.38;
-    group.add(lidMesh);
+    const lidGeo = new THREE.BoxGeometry(0.85, 0.13, 0.85);
+    const lid = new THREE.Mesh(lidGeo, ribbonMat);
+    lid.position.y = 0.64;
+    lid.castShadow = true;
+    group.add(lid);
 
-    // 3. Ribbon Bow on top
-    const bowGeo = new THREE.TorusGeometry(0.18, 0.04, 8, 16);
-    const bowMesh = new THREE.Mesh(bowGeo, lidMat);
-    bowMesh.rotation.x = Math.PI / 2;
-    bowMesh.position.y = 0.48;
-    group.add(bowMesh);
+    const bowGeo = new THREE.TorusGeometry(0.15, 0.035, 6, 14);
+    const bow = new THREE.Mesh(bowGeo, ribbonMat);
+    bow.rotation.x = Math.PI / 2;
+    bow.position.y = 0.73;
+    group.add(bow);
 
-    // 4. Subtle Warm Glow
-    const light = new THREE.PointLight(0xffdd66, 0.8, 4);
-    light.position.y = 0.6;
-    group.add(light);
+    // Additive halo so a present is a visible smudge of warmth down a
+    // corridor. Cheaper than giving every present a real light.
+    const haloMat = new THREE.SpriteMaterial({
+      map: this.haloTexture,
+      color: 0xffb060,
+      transparent: true,
+      opacity: 0.5,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      fog: true
+    });
+    const halo = new THREE.Sprite(haloMat);
+    halo.scale.set(2.6, 2.6, 1);
+    halo.position.y = 0.5;
+    group.add(halo);
 
-    // 5. 3D Anime Body Pillow (Hidden inside until unwrapped)
-    const pillowGeo = new THREE.BoxGeometry(0.75, 1.5, 0.22);
-    // Texture on front and back
-    const sideMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 });
+    const pillowGeo = new THREE.BoxGeometry(0.62, 1.3, 0.18);
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0xf2ece0, roughness: 0.9 });
     const faceMat = new THREE.MeshStandardMaterial({
-      map: pillowData.texture,
-      roughness: 0.5,
-      metalness: 0.05
+      map: pillowData.texture, roughness: 0.62, metalness: 0.0,
+      emissive: 0x221a1a, emissiveMap: pillowData.texture, emissiveIntensity: 0.35
     });
-    const pillowMaterials = [
-      sideMat, sideMat, sideMat, sideMat, faceMat, faceMat
-    ];
-    const pillowMesh = new THREE.Mesh(pillowGeo, pillowMaterials);
-    pillowMesh.position.set(0, 0, 0);
-    pillowMesh.visible = false;
-    group.add(pillowMesh);
+    const pillow = new THREE.Mesh(pillowGeo, [sideMat, sideMat, sideMat, sideMat, faceMat, faceMat]);
+    pillow.position.y = 0.4;
+    pillow.visible = false;
+    group.add(pillow);
+
+    this.disposables.push(boxGeo, boxMat, lidGeo, ribbonMat, bowGeo, haloMat, pillowGeo, sideMat, faceMat);
 
     return {
-      id,
-      group,
-      boxMesh,
-      lidMesh,
-      pillowMesh,
-      light,
-      pillowData,
+      id, group, box, lid, bow, halo, haloMat, pillow, pillowData,
       isUnwrapped: false,
-      isCollected: false,
-      animatingPillow: false,
-      animProgress: 0,
+      revealTimer: 0,
       worldPos: { x, z }
     };
   }
 
-  update(delta, playerPos) {
-    let nearestPresent = null;
-    let minDist = 2.6;
+  // --- Queries (no side effects) ---------------------------------------
 
-    this.presents.forEach(p => {
-      const dx = playerPos.x - p.worldPos.x;
-      const dz = playerPos.z - p.worldPos.z;
-      const dist = Math.sqrt(dx * dx + dz * dz);
+  getNearest(playerPos) {
+    let best = null;
+    let bestDist = REACH;
 
-      // Check proximity for interaction
-      if (!p.isUnwrapped && dist < minDist) {
-        nearestPresent = p;
-        minDist = dist;
-      }
-
-      // Pillow floating animation when unwrapped
-      if (p.animatingPillow && !p.isCollected) {
-        p.animProgress += delta * 1.8;
-        p.pillowMesh.position.y = 0.5 + Math.sin(p.animProgress * 3) * 0.15;
-        p.pillowMesh.rotation.y += delta * 2.2;
-
-        // Auto collect after floating for a brief moment
-        if (p.animProgress > 2.0) {
-          this.collectPillow(p);
-        }
-      }
-    });
-
-    return nearestPresent;
-  }
-
-  unwrapPresent(present) {
-    if (present.isUnwrapped) return;
-    present.isUnwrapped = true;
-    present.animatingPillow = true;
-
-    // Pop lid off with dramatic tilt
-    present.lidMesh.position.y += 0.4;
-    present.lidMesh.position.x += 0.35;
-    present.lidMesh.rotation.z = 0.6;
-
-    // Reveal 3D Body Pillow
-    present.pillowMesh.visible = true;
-    present.pillowMesh.position.y = 0.2;
-
-    // Sound effect: Paper ripping + joyful anime chime
-    horrorAudio.playUnwrap();
-
-    // Show on-screen discovery card
-    this.showPillowDiscoveryModal(present.pillowData);
-  }
-
-  collectPillow(present) {
-    if (present.isCollected) return;
-    present.isCollected = true;
-    present.animatingPillow = false;
-    present.pillowMesh.visible = false;
-    present.light.intensity = 0.1;
-
-    this.collectedCount++;
-    this.inventory.push(present.pillowData);
-
-    // Update HUD Pillows badge
-    this.updateHUD();
-
-    // Notify player if quota reached
-    if (this.collectedCount >= this.requiredCount) {
-      const banner = document.getElementById('objective-banner');
-      if (banner) {
-        banner.innerHTML = "✨ YOU HAVE COLLECTED 5 ANIME BODY PILLOWS!<br>Hurry to the <b>TRIBUTE ALTAR</b> in the central hold to appease Mr. Geil!";
-        banner.classList.add('pulse-gold');
+    for (const p of this.presents) {
+      if (p.isUnwrapped) continue;
+      const d = Math.hypot(playerPos.x - p.worldPos.x, playerPos.z - p.worldPos.z);
+      if (d < bestDist) {
+        best = p;
+        bestDist = d;
       }
     }
-  }
-
-  showPillowDiscoveryModal(pillowData) {
-    const modal = document.getElementById('pillow-discovery');
-    if (!modal) return;
-
-    modal.innerHTML = `
-      <div class="pillow-card">
-        <div class="pillow-badge">✨ SINT GIFT UNWRAPPED! ✨</div>
-        <h2 class="pillow-title">${pillowData.name}</h2>
-        <div class="pillow-quote">"${pillowData.quote}"</div>
-        <p class="pillow-desc">A legendary soft anime dakimakura! Mr. Geil will definitely find this pleasing.</p>
-      </div>
-    `;
-    modal.style.display = 'block';
-
-    setTimeout(() => {
-      modal.style.display = 'none';
-    }, 3200);
-  }
-
-  updateHUD() {
-    const counter = document.getElementById('pillow-counter');
-    if (counter) {
-      counter.innerText = `${this.collectedCount} / ${this.requiredCount}`;
-    }
-
-    // Render thumbnail icons in HUD
-    const list = document.getElementById('pillow-list');
-    if (list) {
-      list.innerHTML = '';
-      this.inventory.forEach(item => {
-        const icon = document.createElement('div');
-        icon.className = 'hud-pillow-item';
-        icon.title = `${item.name}: "${item.quote}"`;
-        icon.innerText = '🌸';
-        list.appendChild(icon);
-      });
-    }
+    return best;
   }
 
   isReadyForTribute() {
     return this.collectedCount >= this.requiredCount;
+  }
+
+  remaining() {
+    return Math.max(0, this.requiredCount - this.collectedCount);
+  }
+
+  // --- Per-frame --------------------------------------------------------
+
+  update(delta, playerPos, interactHeld, canInteract) {
+    const target = canInteract ? this.getNearest(playerPos) : null;
+
+    if (target && target === this.activeTarget && interactHeld) {
+      this.progress += delta / UNWRAP_SECONDS;
+      if (this.progress >= 1) {
+        this.unwrap(target);
+        this.progress = 0;
+        this.activeTarget = null;
+      } else {
+        horrorAudio.playTear(this.progress);
+      }
+    } else {
+      this.activeTarget = target;
+      // Bleed progress away rather than dropping it, so a stutter is forgiving.
+      this.progress = Math.max(0, this.progress - delta * 1.6);
+    }
+
+    for (const p of this.presents) {
+      if (p.revealTimer > 0) {
+        p.revealTimer -= delta;
+        const t = 1 - Math.max(0, p.revealTimer) / 1.2;
+        p.pillow.position.y = 0.4 + t * 0.9;
+        p.pillow.rotation.y += delta * 3.0;
+        p.pillow.scale.setScalar(Math.max(0.001, 1 - t * 0.65));
+        if (p.revealTimer <= 0) p.pillow.visible = false;
+      }
+      // Halo breathes, and dies once the present is spent.
+      if (!p.isUnwrapped) {
+        p.haloMat.opacity = 0.38 + Math.sin(performance.now() / 700 + p.id) * 0.1;
+      }
+    }
+
+    return { target: this.activeTarget, progress: this.progress };
+  }
+
+  unwrap(present) {
+    if (present.isUnwrapped) return;
+    present.isUnwrapped = true;
+
+    present.lid.position.set(0.42, 0.22, 0.18);
+    present.lid.rotation.set(0.5, 0.3, 0.8);
+    present.bow.visible = false;
+    present.pillow.visible = true;
+    present.revealTimer = 1.2;
+    present.haloMat.opacity = 0.0;
+
+    this.collectedCount++;
+    this.inventory.push(present.pillowData);
+
+    horrorAudio.playUnwrap();
+
+    if (this.onUnwrapped) {
+      this.onUnwrapped(present.pillowData, present.worldPos.x, present.worldPos.z, UNWRAP_NOISE_RADIUS);
+    }
+  }
+
+  dispose() {
+    for (const p of this.presents) this.scene.remove(p.group);
+    for (const item of this.disposables) {
+      if (item && typeof item.dispose === 'function') item.dispose();
+    }
+    this.presents.length = 0;
+    this.disposables.length = 0;
   }
 }

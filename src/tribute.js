@@ -1,8 +1,11 @@
-// Sacred Sinterklaas Tribute Altar & Escape Sequence
-// Place 5 Anime Body Pillows on the altar to appease Mr. Geil!
+// The tribute altar in the hold. Five anime body pillows, laid out one by one while
+// you stand still and exposed, and Mr. Geil lets you off the boat.
 
 import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
+
+const REACH = 3.6;
+const OFFER_SECONDS = 2.6;
 
 export class TributeAltar {
   constructor(scene, map) {
@@ -11,158 +14,218 @@ export class TributeAltar {
     this.pos = map.altarLocation;
 
     this.group = new THREE.Group();
-    this.isOffered = false;
     this.candles = [];
-    this.altarMesh = null;
-    this.altarLight = null;
+    this.placed = [];
+    this.disposables = [];
 
-    this.setupAltar();
+    this.isOffered = false;
+    this.progress = 0;
+
+    this.build();
   }
 
-  setupAltar() {
+  build() {
     this.group.position.set(this.pos.x, 0, this.pos.z);
 
-    // 1. Altar Pedestal (Stepped golden stone base)
-    const baseGeo = new THREE.BoxGeometry(3.6, 0.4, 2.6);
-    const baseMat = new THREE.MeshStandardMaterial({
-      color: 0x1f1914,
-      roughness: 0.8,
-      metalness: 0.2
-    });
-    const base = new THREE.Mesh(baseGeo, baseMat);
-    base.position.y = 0.2;
+    const stoneMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.94, metalness: 0.1 });
+    const baseGeo = new THREE.BoxGeometry(3.8, 0.42, 2.4);
+    const base = new THREE.Mesh(baseGeo, stoneMat);
+    base.position.y = 0.21;
+    base.receiveShadow = true;
+    base.castShadow = true;
     this.group.add(base);
 
-    // 2. Velvet Offering Table
-    const tableGeo = new THREE.BoxGeometry(3.2, 0.6, 2.2);
-    const altarTex = TextureFactory.createAltarTexture();
-    const tableMat = new THREE.MeshStandardMaterial({
-      map: altarTex,
-      roughness: 0.6,
-      metalness: 0.3
-    });
-    this.altarMesh = new THREE.Mesh(tableGeo, tableMat);
-    this.altarMesh.position.y = 0.7;
-    this.group.add(this.altarMesh);
+    const clothTex = TextureFactory.createAltarCloth();
+    const clothMat = new THREE.MeshStandardMaterial({ map: clothTex, roughness: 0.85, metalness: 0.05 });
+    const tableGeo = new THREE.BoxGeometry(3.3, 0.62, 2.0);
+    this.table = new THREE.Mesh(tableGeo, clothMat);
+    this.table.position.y = 0.73;
+    this.table.castShadow = true;
+    this.table.receiveShadow = true;
+    this.group.add(this.table);
 
-    // 3. Golden Sinterklaas Staf (Crozier) resting beside Altar
-    const staffGroup = new THREE.Group();
-    const poleGeo = new THREE.CylinderGeometry(0.04, 0.04, 2.6, 12);
-    const goldMat = new THREE.MeshStandardMaterial({
-      color: 0xffd700,
-      metalness: 0.9,
-      roughness: 0.2
-    });
-    const pole = new THREE.Mesh(poleGeo, goldMat);
-    staffGroup.add(pole);
-
-    // Staf curl
-    const curlGeo = new THREE.TorusGeometry(0.24, 0.04, 12, 24, Math.PI * 1.5);
+    // Sinterklaas' staf, leant against the altar.
+    const goldMat = new THREE.MeshStandardMaterial({ color: 0xb08b31, metalness: 0.92, roughness: 0.28 });
+    const poleGeo = new THREE.CylinderGeometry(0.04, 0.04, 2.6, 10);
+    const staff = new THREE.Group();
+    staff.add(new THREE.Mesh(poleGeo, goldMat));
+    const curlGeo = new THREE.TorusGeometry(0.22, 0.038, 8, 20, Math.PI * 1.5);
     const curl = new THREE.Mesh(curlGeo, goldMat);
-    curl.position.set(0.18, 1.35, 0);
-    staffGroup.add(curl);
+    curl.position.set(0.16, 1.32, 0);
+    staff.add(curl);
+    staff.position.set(-1.92, 1.3, -0.7);
+    staff.rotation.z = -0.16;
+    this.group.add(staff);
 
-    staffGroup.position.set(-1.8, 1.3, -0.8);
-    staffGroup.rotation.z = -0.15;
-    this.group.add(staffGroup);
+    this.createCandle(-1.34, 1.06, 0.66);
+    this.createCandle(-1.34, 1.06, -0.66);
+    this.createCandle(1.34, 1.06, 0.66);
+    this.createCandle(1.34, 1.06, -0.66);
 
-    // 4. Ritual Candelabras (Candles on left and right)
-    this.createCandle(-1.4, 1.05, 0.8);
-    this.createCandle(-1.4, 1.05, -0.8);
-    this.createCandle(1.4, 1.05, 0.8);
-    this.createCandle(1.4, 1.05, -0.8);
+    this.light = new THREE.PointLight(0xffa03c, 1.6, 12, 2.0);
+    this.light.position.set(0, 1.9, 0);
+    this.group.add(this.light);
 
-    // 5. Altar Light
-    this.altarLight = new THREE.PointLight(0xffaa33, 1.8, 8);
-    this.altarLight.position.set(0, 1.8, 0);
-    this.group.add(this.altarLight);
+    // Visible from down the corridor, so the hold is findable.
+    const haloTex = TextureFactory.createBlobShadow();
+    const haloMat = new THREE.SpriteMaterial({
+      map: haloTex, color: 0xffa64d, transparent: true, opacity: 0.42,
+      blending: THREE.AdditiveBlending, depthWrite: false, fog: true
+    });
+    this.halo = new THREE.Sprite(haloMat);
+    this.halo.scale.set(6, 6, 1);
+    this.halo.position.y = 1.5;
+    this.group.add(this.halo);
 
     this.scene.add(this.group);
+    this.disposables.push(
+      stoneMat, baseGeo, clothTex, clothMat, tableGeo,
+      goldMat, poleGeo, curlGeo, haloTex, haloMat
+    );
   }
 
   createCandle(x, y, z) {
-    const candleGroup = new THREE.Group();
-    candleGroup.position.set(x, y, z);
+    const group = new THREE.Group();
+    group.position.set(x, y, z);
 
-    // Wax stick
-    const waxGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.35, 8);
-    const waxMat = new THREE.MeshStandardMaterial({ color: 0xfffae6, roughness: 0.9 });
-    const wax = new THREE.Mesh(waxGeo, waxMat);
-    candleGroup.add(wax);
+    const waxGeo = new THREE.CylinderGeometry(0.038, 0.045, 0.34, 8);
+    const waxMat = new THREE.MeshStandardMaterial({ color: 0xd8cfb8, roughness: 0.95 });
+    group.add(new THREE.Mesh(waxGeo, waxMat));
 
-    // Flame
-    const flameGeo = new THREE.SphereGeometry(0.035, 6, 6);
-    const flameMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
+    const flameGeo = new THREE.SphereGeometry(0.032, 6, 5);
+    const flameMat = new THREE.MeshBasicMaterial({ color: 0xffa93c });
     const flame = new THREE.Mesh(flameGeo, flameMat);
     flame.position.y = 0.2;
-    flame.scale.set(1, 1.6, 1);
-    candleGroup.add(flame);
+    flame.scale.set(1, 1.7, 1);
+    group.add(flame);
 
-    const candleLight = new THREE.PointLight(0xff7711, 0.6, 3.5);
-    candleLight.position.y = 0.22;
-    candleGroup.add(candleLight);
-
-    this.group.add(candleGroup);
-    this.candles.push({ flame, candleLight, baseIntensity: 0.6, phase: Math.random() * Math.PI });
+    this.group.add(group);
+    this.disposables.push(waxGeo, waxMat, flameGeo, flameMat);
+    this.candles.push({ flame, flameMat, phase: Math.random() * Math.PI * 2 });
   }
 
-  update(delta, playerPos) {
-    // Candle flicker
+  // --- Per-frame -------------------------------------------------------
+
+  isInRange(playerPos) {
+    return Math.hypot(playerPos.x - this.pos.x, playerPos.z - this.pos.z) < REACH;
+  }
+
+  update(delta, playerPos, interactHeld, itemManager) {
     const time = performance.now() / 1000;
-    this.candles.forEach(c => {
-      const flick = Math.sin(time * 10 + c.phase) * 0.15;
-      c.candleLight.intensity = c.baseIntensity + flick;
-    });
+    for (const c of this.candles) {
+      const flick = 0.8 + Math.sin(time * 11 + c.phase) * 0.2;
+      c.flame.scale.set(flick, 1.7 * flick, flick);
+      c.flameMat.color.setRGB(1, 0.62 * flick, 0.22 * flick);
+    }
+    this.light.intensity = 1.5 + Math.sin(time * 6.5) * 0.18;
 
-    // Distance check to player
-    const dx = playerPos.x - this.pos.x;
-    const dz = playerPos.z - this.pos.z;
-    const dist = Math.sqrt(dx * dx + dz * dz);
+    const inRange = this.isInRange(playerPos);
+    const canOffer = inRange && !this.isOffered && itemManager.isReadyForTribute();
 
-    return dist < 3.8;
+    if (canOffer && interactHeld) {
+      const before = this.progress;
+      this.progress = Math.min(1, this.progress + delta / OFFER_SECONDS);
+      this.placePillowsUpTo(this.progress, itemManager);
+      // One chime per pillow laid down.
+      const step = 1 / itemManager.inventory.length;
+      if (Math.floor(before / step) !== Math.floor(this.progress / step)) {
+        horrorAudio.playPillowChime();
+      }
+    } else if (!this.isOffered) {
+      this.progress = Math.max(0, this.progress - delta * 1.2);
+      this.placePillowsUpTo(this.progress, itemManager);
+    }
+
+    return { inRange, progress: this.progress, canOffer };
   }
 
-  // Offer the collected anime body pillows on the Altar!
-  performTribute(itemManager, geilEnemy, onVictory) {
+  // Lay out however many pillows the hold has earned so far.
+  placePillowsUpTo(progress, itemManager) {
+    const total = itemManager.inventory.length;
+    if (total === 0) return;
+    const wanted = Math.min(total, Math.floor(progress * total + 0.0001));
+
+    while (this.placed.length < wanted) {
+      const idx = this.placed.length;
+      const data = itemManager.inventory[idx];
+      const geo = new THREE.BoxGeometry(0.5, 1.0, 0.14);
+      const sideMat = new THREE.MeshStandardMaterial({ color: 0xf2ece0, roughness: 0.9 });
+      const faceMat = new THREE.MeshStandardMaterial({
+        map: data.texture, roughness: 0.6,
+        emissive: 0x1a1414, emissiveMap: data.texture, emissiveIntensity: 0.4
+      });
+      const mesh = new THREE.Mesh(geo, [sideMat, sideMat, sideMat, sideMat, faceMat, faceMat]);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.z = (idx - (total - 1) / 2) * 0.22;
+      mesh.position.set((idx - (total - 1) / 2) * 0.62, 1.09, 0);
+      mesh.castShadow = true;
+      this.group.add(mesh);
+      this.placed.push(mesh);
+      this.disposables.push(geo, sideMat, faceMat);
+    }
+
+    while (this.placed.length > wanted) {
+      const mesh = this.placed.pop();
+      this.group.remove(mesh);
+      this.releaseMesh(mesh);
+    }
+  }
+
+  // Drop a pillow mesh's own geometry and materials, and stop tracking them.
+  releaseMesh(mesh) {
+    const owned = [mesh.geometry, ...(Array.isArray(mesh.material) ? mesh.material : [mesh.material])];
+    for (const item of new Set(owned)) {
+      const i = this.disposables.indexOf(item);
+      if (i >= 0) this.disposables.splice(i, 1);
+      if (item && typeof item.dispose === 'function') item.dispose();
+    }
+  }
+
+  // --- Completion ------------------------------------------------------
+
+  complete(enemy) {
     if (this.isOffered) return;
     this.isOffered = true;
+    this.progress = 1;
 
-    // Place all collected body pillows neatly arranged on the velvet altar
-    itemManager.inventory.forEach((pillowData, idx) => {
-      const pillowGeo = new THREE.BoxGeometry(0.55, 1.1, 0.15);
-      const sideMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 });
-      const faceMat = new THREE.MeshStandardMaterial({
-        map: pillowData.texture,
-        roughness: 0.5
-      });
-      const pillowMaterials = [sideMat, sideMat, sideMat, sideMat, faceMat, faceMat];
-      const mesh = new THREE.Mesh(pillowGeo, pillowMaterials);
+    this.light.color.setHex(0xffd066);
+    this.light.intensity = 7.0;
+    this.light.distance = 26;
+    this.halo.material.color.setHex(0xffd98a);
+    this.halo.material.opacity = 0.85;
+    this.halo.scale.set(11, 11, 1);
 
-      // Lay down on the altar with slight rotation
-      mesh.rotation.x = -Math.PI / 2;
-      mesh.rotation.z = (idx - 2) * 0.25;
-      mesh.position.set((idx - 2) * 0.65, 1.08, 0);
-      this.group.add(mesh);
-    });
+    enemy.pacify();
+    // He comes to collect, and is delighted.
+    enemy.x = this.pos.x;
+    enemy.z = this.pos.z - 4.2;
 
-    // Divine golden beam of light
-    this.altarLight.color.setHex(0xffdd44);
-    this.altarLight.intensity = 6.0;
-    this.altarLight.distance = 16.0;
-
-    // Pacify Mr. Geil
-    geilEnemy.pacify();
-    geilEnemy.x = this.pos.x;
-    geilEnemy.z = this.pos.z - 3.2;
-
-    // Victory audio fanfare
     horrorAudio.playTributeSuccess();
+  }
 
-    // Trigger victory sequence
-    if (onVictory) {
-      setTimeout(() => {
-        onVictory();
-      }, 1200);
+  reset() {
+    this.isOffered = false;
+    this.progress = 0;
+    // Laid-out pillows are rebuilt from scratch next run, so free them here
+    // rather than letting a set accumulate on every retry.
+    for (const mesh of this.placed) {
+      this.group.remove(mesh);
+      this.releaseMesh(mesh);
     }
+    this.placed.length = 0;
+    this.light.color.setHex(0xffa03c);
+    this.light.intensity = 1.6;
+    this.light.distance = 12;
+    this.halo.material.color.setHex(0xffa64d);
+    this.halo.material.opacity = 0.42;
+    this.halo.scale.set(6, 6, 1);
+  }
+
+  dispose() {
+    this.scene.remove(this.group);
+    for (const item of this.disposables) {
+      if (item && typeof item.dispose === 'function') item.dispose();
+    }
+    this.disposables.length = 0;
   }
 }

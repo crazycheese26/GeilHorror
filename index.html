@@ -3,124 +3,175 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Geil the Game - De Stoomboot van Sinterklaas</title>
+  <meta name="description" content="A first-person stealth horror game set in the corridors of Sinterklaas' steamboat.">
+  <title>GEIL — De Stoomboot</title>
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div id="game-container">
-    <!-- 3D WebGL Canvas -->
+  <div id="stage">
     <canvas id="game-canvas"></canvas>
 
-    <!-- Retro CRT Scanlines & Horror Vignette Overlays -->
-    <div id="static-overlay"></div>
-    <div id="horror-vignette"></div>
-    <div id="crosshair"></div>
+    <div id="grain" aria-hidden="true"></div>
+    <div id="vignette" aria-hidden="true"></div>
+    <div id="danger-vignette" aria-hidden="true"></div>
+    <div id="hidden-mask" aria-hidden="true"></div>
 
-    <!-- Pillow Discovery Popup Card -->
-    <div id="pillow-discovery"></div>
-
-    <!-- In-Game HUD -->
-    <div id="game-hud">
-      <!-- Objective Banner -->
-      <div id="objective-banner">
-        Collect 5 Anime Body Pillows from Sint Presents and bring them to the Tribute Altar!
-      </div>
-
-      <!-- Mr. Geil Proximity Alert -->
-      <div id="geil-warning">⚠️ MR. GEIL IS NEARBY! HE WANTS TO EAT YOU!</div>
-
-      <!-- Anime Body Pillows Inventory (Top Left) -->
-      <div id="pillow-inventory">
-        <div class="hud-label">Body Pillows</div>
-        <div id="pillow-counter">0 / 5</div>
-        <div id="pillow-list"></div>
-      </div>
-
-      <!-- Audio Mute Button -->
-      <button id="btn-mute">🔊 Audio: ON</button>
-
-
-
-      <!-- Stamina Meter (Bottom Left) -->
-      <div id="stamina-container">
-        <div class="stamina-label">Stamina [Shift: Run]</div>
-        <div id="stamina-track">
-          <div id="stamina-fill"></div>
+    <!-- ------------------------------------------------------- HUD -->
+    <div id="hud">
+      <div id="objective-block">
+        <div id="objective">Find 5 more anime body pillows</div>
+        <div id="pillow-row">
+          <span id="pillow-count">0</span>
+          <span class="of">/ 5</span>
+          <span id="pillow-pips"></span>
         </div>
       </div>
 
-      <!-- Interaction Prompt -->
-      <div id="interaction-prompt">
-        <span class="key-tag">[E]</span> or <span class="key-tag">[Click]</span> Unwrap Present
+      <div id="torch-state"><span class="dot"></span>Torch</div>
+
+      <div id="zone-name"></div>
+      <div id="toast"></div>
+
+      <div id="reticle">
+        <div id="crosshair"></div>
+        <svg id="awareness" viewBox="0 0 40 40" aria-hidden="true">
+          <circle class="track" cx="20" cy="20" r="15"></circle>
+          <circle id="awareness-arc" cx="20" cy="20" r="15"></circle>
+        </svg>
+        <div id="threat-ring"><div class="chevron"></div></div>
       </div>
 
-      <!-- Controls Hint (Bottom Right) -->
-      <div id="controls-hint">
-        <b>Controls:</b><br>
-        • W / S or ↑ / ↓ : Walk<br>
-        • A / D or ← / → : Turn Camera<br>
-        • Shift : Sprint<br>
-        • E / Space / Click : Interact
+      <div id="prompt">
+        <div id="prompt-text"></div>
+        <div id="prompt-track"><div id="prompt-fill"></div></div>
+      </div>
+
+      <div id="stamina">
+        <div class="hud-label">Breath</div>
+        <div id="stamina-track"><div id="stamina-fill"></div></div>
+      </div>
+
+      <div id="keyhints">
+        <span><b>WSAD</b> move</span>
+        <span><b>Shift</b> run</span>
+        <span><b>C</b> sneak</span>
+        <span><b>F</b> torch</span>
+        <span><b>E</b> use</span>
+        <span><b>Esc</b> pause</span>
       </div>
     </div>
 
-    <!-- Title Screen Modal -->
-    <div id="title-screen" class="game-modal">
-      <h1 class="title-header">GEIL: THE GAME</h1>
-      <div class="title-sub">De Stoomboot van Sinterklaas (3D Horror)</div>
+    <!-- --------------------------------------------------- Title -->
+    <section id="title-screen" class="screen is-visible">
+      <div class="screen-inner">
+        <header class="masthead">
+          <p class="kicker">De donkere gangen van de stoomboot</p>
+          <h1>GEIL</h1>
+          <p class="tagline">Mr. Geil is hungry. Five anime body pillows will change his mind.</p>
+        </header>
 
-      <img src="assets/geil_original.png" alt="Mr. Geil Monster Sketch" class="monster-preview">
+        <img src="assets/geil_original.png" alt="The original sketch of Mr. Geil" class="sketch">
 
-      <div class="story-box">
-        <p>You are trapped inside the dark, creaking corridors van de stoomboot van Sinterklaas.</p>
-        <p style="margin-top: 8px;">A horrifying creature known as <b>Mr. Geil</b> stalks the ship. <b>He needs to eat you to become EXTRA GEIL!</b></p>
-        <p style="margin-top: 8px;">How do you escape? Explore the corridors, unwrap the Sint presents to find <b>5 anime body pillows</b>, and place them as an offering on the <b>Tribute Altar</b>. Mr. Geil is very pleased with anime body pillows and will let you escape unharmed!</p>
-
-        <div class="controls-guide">
-          <b>Movement Controls:</b><br>
-          <b>W</b> and <b>S</b> (or <b>↑</b> / <b>↓</b>) to move forwards and backwards.<br>
-          <b>A</b> and <b>D</b> (or <b>←</b> / <b>→</b>) to turn the camera left or right.<br>
-          <b>Shift</b> to sprint &nbsp;|&nbsp; <b>E</b> / <b>Space</b> / <b>Click</b> to unwrap presents and use the Altar.
-        </div>
-      </div>
-
-      <button id="btn-start" class="btn-horror">ENTER THE STOOMBOOT</button>
-    </div>
-
-    <!-- Jumpscare Screen (Game Over) -->
-    <div id="jumpscare-screen" class="game-modal">
-      <img src="assets/geil_original.png" alt="Mr. Geil Jumpscare" class="jumpscare-img">
-      <h1 class="jumpscare-title">MR. GEIL ATE YOU!</h1>
-      <p class="jumpscare-desc">He devoured you and became <b>EXTRA GEIL</b>...</p>
-      <button id="btn-retry" class="btn-horror">TRY AGAIN</button>
-    </div>
-
-    <!-- Victory Screen -->
-    <div id="victory-screen" class="game-modal">
-      <h1 class="victory-title">✨ YOU ESCAPED! ✨</h1>
-      <div class="victory-sub">De Stoomboot van Sinterklaas</div>
-
-      <div class="victory-box">
-        <p style="font-size: 20px; color: #ffd700; font-weight: bold; margin-bottom: 12px;">
-          MR. GEIL IS VERY PLEASED WITH THE ANIME BODY PILLOWS!
+        <p class="brief">
+          He hunts by sight and sound, and he remembers where he last saw you.
+          Break his line of sight and go quiet and he loses you — but your torch
+          makes you visible from nearly twice as far, sprinting can be heard
+          across half the ship, and tearing a pakje open is the loudest thing
+          you can do.
         </p>
-        <p>The sacred offering of 5 soft dakimakura body pillows has pacified the beast. Mr. Geil is happily snuggling all of them in his quarters.</p>
-        <p style="margin-top: 10px;">The steamboat's escape gangway has opened, allowing you to flee into the cold Dutch night safely!</p>
-      </div>
 
-      <button id="btn-play-again" class="btn-victory">PLAY AGAIN</button>
-    </div>
+        <div class="panel">
+          <div class="field">
+            <span class="field-label">Controls</span>
+            <div class="segmented">
+              <button type="button" data-scheme="mouse">Mouse look</button>
+              <button type="button" data-scheme="tank">Keyboard turn</button>
+            </div>
+            <p class="field-note" data-note="mouse">Click to capture the pointer. <b>A/D</b> strafe.</p>
+            <p class="field-note" data-note="tank">No mouse needed. <b>A/D</b> turn the camera.</p>
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="set-brightness">Brightness</label>
+            <input id="set-brightness" type="range" min="0" max="100" value="40">
+          </div>
+
+          <div class="field" id="sens-row">
+            <label class="field-label" for="set-sensitivity">Mouse sensitivity</label>
+            <input id="set-sensitivity" type="range" min="30" max="250" value="100">
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="set-volume">Volume</label>
+            <input id="set-volume" type="range" min="0" max="100" value="75">
+          </div>
+        </div>
+
+        <button id="btn-start" class="btn btn-primary" type="button">Go below deck</button>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------- Pause -->
+    <section id="pause-screen" class="screen">
+      <div class="screen-inner narrow">
+        <h2>Paused</h2>
+        <div class="panel">
+          <div class="field">
+            <span class="field-label">Controls</span>
+            <div class="segmented">
+              <button type="button" data-scheme="mouse">Mouse look</button>
+              <button type="button" data-scheme="tank">Keyboard turn</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">Brightness</span>
+            <input type="range" min="0" max="100" value="40"
+                   oninput="document.getElementById('set-brightness').value=this.value;document.getElementById('set-brightness').dispatchEvent(new Event('input'))">
+          </div>
+          <div class="field">
+            <span class="field-label">Volume</span>
+            <input type="range" min="0" max="100" value="75"
+                   oninput="document.getElementById('set-volume').value=this.value;document.getElementById('set-volume').dispatchEvent(new Event('input'))">
+          </div>
+        </div>
+        <div class="btn-row">
+          <button id="btn-resume" class="btn btn-primary" type="button">Resume</button>
+          <button id="btn-quit" class="btn" type="button">Give up</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------- Death -->
+    <section id="death-screen" class="screen screen-death">
+      <div class="screen-inner narrow">
+        <h2 class="death-title">MR. GEIL ATE YOU</h2>
+        <p id="death-reason" class="death-reason">He found you.</p>
+        <p class="death-flavour">He is, at last, <b>extra geil</b>.</p>
+        <button id="btn-retry" class="btn btn-primary" type="button">Again</button>
+      </div>
+    </section>
+
+    <!-- ------------------------------------------------- Victory -->
+    <section id="victory-screen" class="screen screen-victory">
+      <div class="screen-inner narrow">
+        <h2 class="victory-title">YOU GOT OFF THE BOAT</h2>
+        <p>
+          Five anime body pillows lie on the altar in het ruim. Mr. Geil is snuggling
+          all of them at once and has entirely lost interest in eating you.
+        </p>
+        <p class="victory-flavour">The gangway is open. Go, into the cold Dutch night.</p>
+        <button id="btn-play-again" class="btn btn-primary" type="button">Again</button>
+      </div>
+    </section>
   </div>
 
-  <!-- Local Three.js with CDN Fallback -->
   <script src="libs/three.min.js"></script>
   <script>
+    // Local copy first; CDN only if the local file is missing.
     if (typeof THREE === 'undefined') {
       document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
     }
   </script>
-
-  <!-- Main Game Orchestrator -->
   <script type="module" src="src/main.js"></script>
 </body>
 </html>
