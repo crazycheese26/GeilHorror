@@ -6,6 +6,7 @@ import { Player } from './player.js';
 import { GeilEnemy, STATE } from './enemy.js';
 import { ItemManager } from './items.js';
 import { TributeAltar } from './tribute.js';
+import { Lantern } from './lantern.js';
 import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
 import { Rng, makeSeed, formatSeed, parseSeed } from './rng.js';
@@ -20,6 +21,7 @@ const SINT_LINES = [
   'I cannot go down there. The Pieten will not go down there. But the boat cannot dock with him awake in the hold, and by morning we have to be ashore.',
   'He cannot be fought and he cannot be reasoned with. He can only be given something. Five of the pakjes below deck have an anime body pillow in them. Find five. Tear them open.',
   'Carry them to the altar in het ruim and lay them out in a row, and he will want nothing else for the rest of the crossing. Do that and the hold goes quiet.',
+  'Take this before you go down. A lantaarntje — the Pieten carried them in the hold, and the flame in this one does not care for Mijnheer Geil. It ticks when he is near you, and faster the nearer he comes. It will not tell you where he is. Only how much room you have left.',
   'Hold your breath at every corner. Keep the torch off unless you must. And whatever you do — do not let him see you tearing the paper.'
 ];
 
@@ -146,6 +148,7 @@ class Game {
       danger: $('danger-vignette'),
       hiddenMask: $('hidden-mask'),
       torch: $('torch-state'),
+      lantern: $('lantern'),
       objective: $('objective'),
       settingInputs: document.querySelectorAll('[data-setting]'),
       seed: $('set-seed'),
@@ -199,6 +202,7 @@ class Game {
     this.enemy.reset();
     this.items = new ItemManager(this.scene, this.map, this.runRng);
     this.altar = new TributeAltar(this.scene, this.map);
+    this.lantern = new Lantern();
 
     this.attachItemHooks();
 
@@ -515,6 +519,8 @@ class Game {
 
     this.altar.reset();
     this.player.reset();
+    this.lantern.reset();
+    this.paintLantern();
     this.enemy.applyRunLayout(this.runLayout);
     this.enemy.reset();
 
@@ -606,6 +612,7 @@ class Game {
 
     this.enemy.update(delta, this.player, () => this.triggerDeath());
     this.updateMusicMood(delta);
+    this.updateLantern(delta);
 
     this.updateHud(pos, itemState, altarState);
     this.updateZone(pos, delta);
@@ -720,6 +727,27 @@ class Game {
     if (d.hiddenMask) {
       d.hiddenMask.classList.toggle('is-visible', this.player.isHidden);
     }
+  }
+
+  // Sint's lantaarntje reads one number — how far away he is — and turns it
+  // into a rate. Straight-line distance, so it counts a bulkhead for nothing,
+  // and no bearing, so it never does the hiding for you.
+  updateLantern(delta) {
+    this.lantern.update(delta, this.enemy.distToPlayer, this.enemy.state === STATE.PACIFIED);
+    if (this.lantern.ticked) horrorAudio.playLanternTick(this.lantern.proximity);
+    this.paintLantern();
+  }
+
+  paintLantern() {
+    const el = this.dom.lantern;
+    if (!el) return;
+    const lamp = this.lantern;
+    el.classList.toggle('is-lit', lamp.lit);
+    el.classList.toggle('is-alarm', lamp.alarm);
+    // The stylesheet turns these into a brightness and a halo; the phase and
+    // the rate behind them never leave this loop.
+    el.style.setProperty('--glow', lamp.glow.toFixed(3));
+    el.style.setProperty('--near', lamp.proximity.toFixed(3));
   }
 
   updateZone(pos, delta) {

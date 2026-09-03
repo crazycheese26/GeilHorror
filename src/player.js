@@ -15,6 +15,9 @@ const CROUCH_HEIGHT = 1.05;
 const HIDDEN_HEIGHT = 0.85;
 
 const SPEED = { sneak: 1.7, walk: 3.5, sprint: 6.2 };
+// Full beam. The torch is dimmed to nothing rather than switched off, so this
+// is the only place the lit value lives.
+const TORCH_INTENSITY = 3.4;
 // How far each gait carries in open air. Walls cut this roughly in half.
 const NOISE_RADIUS = { still: 0, sneak: 3.5, walk: 13, sprint: 26 };
 
@@ -75,7 +78,7 @@ export class Player {
   // --- Flashlight ------------------------------------------------------
 
   setupFlashlight() {
-    this.flashlight = new THREE.SpotLight(0xffe9cc, 3.4, 32, Math.PI / 5.4, 0.55, 1.5);
+    this.flashlight = new THREE.SpotLight(0xffe9cc, 0, 32, Math.PI / 5.4, 0.55, 1.5);
     this.flashlight.castShadow = true;
     this.flashlight.shadow.mapSize.width = 1024;
     this.flashlight.shadow.mapSize.height = 1024;
@@ -83,7 +86,10 @@ export class Player {
     this.flashlight.shadow.camera.far = 32;
     this.flashlight.shadow.bias = -0.0018;
     this.flashlight.position.set(0.22, -0.16, 0);
-    this.flashlight.visible = this.flashlightOn;
+    // Never hidden — see setFlashlight. It is in the scene from the first frame
+    // so every material compiles once, with the torch already accounted for.
+    this.flashlight.visible = true;
+    this.setFlashlight(this.flashlightOn, true);
 
     this.flashlightTarget = new THREE.Object3D();
     this.flashlightTarget.position.set(0, 0, -6);
@@ -98,9 +104,22 @@ export class Player {
 
   // silent skips the switch sound, for setting a run up rather than the player
   // actually thumbing the torch.
+  //
+  // The beam is dimmed, not hidden. Hiding a shadow-casting light takes it out
+  // of the renderer's lighting state, that changes the program cache key, and
+  // every shader in the scene recompiles — a hitch on every press of F, in a
+  // game where the torch goes on and off constantly. Leaving the light in the
+  // state and moving its intensity keeps the compiled programs; parking the
+  // shadow pass while it is dark keeps an unlit torch costing nothing.
   setFlashlight(on, silent = false) {
     this.flashlightOn = on;
-    this.flashlight.visible = on;
+    this.flashlight.intensity = on ? TORCH_INTENSITY : 0;
+    const shadow = this.flashlight.shadow;
+    if (shadow) {
+      shadow.autoUpdate = on;
+      // Redraw on the frame it comes back on, not the frame after.
+      if (on) shadow.needsUpdate = true;
+    }
     if (!silent) horrorAudio.playClick();
   }
 

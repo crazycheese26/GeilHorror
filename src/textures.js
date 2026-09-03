@@ -1,6 +1,6 @@
 // Procedural canvas textures for the stoomboot.
-// Everything except the Mr. Geil sketch is drawn at runtime, so there are no
-// image files to go missing on a static host.
+// Everything except the Mr. Geil sketch and the pillow art is drawn at
+// runtime, so there are few image files to go missing on a static host.
 
 const TAU = Math.PI * 2;
 
@@ -386,150 +386,38 @@ export class TextureFactory {
 
   // --- Anime body pillows -----------------------------------------------
 
-  // Deliberately garish. The joke only lands if they clash with the ship.
+  // Real character art, loaded from assets/pillows/. Deliberately garish
+  // choices — the joke only lands if they clash with the ship.
   static createAnimePillows() {
     const waifus = [
-      { name: 'Catgirl Sakura-chan',    bg: ['#ffd1dc', '#ff9bb2'], hair: '#ff77a9', eye: '#00b4d8', ears: true,  mitre: false, quote: 'Nya~! Mr. Geil, wees voorzichtig!' },
-      { name: 'Tsundere Asuka Maid',    bg: ['#d8e2dc', '#b8c0ff'], hair: '#f77f00', eye: '#2b9348', ears: false, mitre: false, quote: "B-baka! It's not like I like Geil!" },
-      { name: 'Sint-chan',              bg: ['#ffccd5', '#c9184a'], hair: '#ffb703', eye: '#023e8a', ears: false, mitre: true,  quote: 'Wie zoet is krijgt lekkers~' },
-      { name: 'Goth Demon Senpai',      bg: ['#240046', '#5a189a'], hair: '#9d4edd', eye: '#ff0054', ears: true,  mitre: false, quote: 'Ara ara, Geil-kun...' },
-      { name: 'Cyber Idol Miku-san',    bg: ['#cbf3f0', '#2ec4b6'], hair: '#00f5d4', eye: '#ff006e', ears: false, mitre: false, quote: '100% EXTRA GEIL POWER!' },
-      { name: 'Pepernoot Onee-san',     bg: ['#f6e2c8', '#c98f4a'], hair: '#6b3410', eye: '#a3320b', ears: false, mitre: false, quote: 'Strooi mij, senpai!' },
-      { name: 'Stoomboot Kapitein-chan',bg: ['#cfe3f2', '#4a6fa5'], hair: '#123a63', eye: '#ffd166', ears: false, mitre: false, quote: 'Volle kracht vooruit, Geil-sama!' },
-      { name: 'Marsepein Mahou-shoujo', bg: ['#ffe9f0', '#f7a8c4'], hair: '#ffd6e8', eye: '#c04a7a', ears: false, mitre: false, quote: 'Transformatie: EXTRA GEIL!' },
-      { name: 'Chocoladeletter Senpai', bg: ['#e8d3bd', '#6b4224'], hair: '#3b2113', eye: '#c98f4a', ears: false, mitre: false, quote: 'Ik ben een S. Voor Senpai.' },
-      { name: 'Stroopwafel Yandere',    bg: ['#f4dfa8', '#a8762c'], hair: '#7a4a18', eye: '#d92b2b', ears: false, mitre: false, quote: 'Je gaat nergens heen, Geil-kun.' }
+      { name: 'Catgirl Sakura-chan',     file: 'catgirl-sakura.jpg',          quote: 'Nya~! Mr. Geil, wees voorzichtig!' },
+      { name: 'Tsundere Asuka Maid',     file: 'tsundere-asuka-maid.jpg',     quote: "B-baka! It's not like I like Geil!" },
+      { name: 'Sint-chan',               file: 'sint-chan.jpg',               quote: 'Wie zoet is krijgt lekkers~' },
+      { name: 'Goth Demon Senpai',       file: 'goth-demon-senpai.jpg',       quote: 'Ara ara, Geil-kun...' },
+      { name: 'Cyber Idol Miku-san',     file: 'cyber-idol-miku.jpg',         quote: '100% EXTRA GEIL POWER!' },
+      { name: 'Pepernoot Onee-san',      file: 'pepernoot-oneesan.jpg',       quote: 'Strooi mij, senpai!' },
+      { name: 'Stoomboot Kapitein-chan', file: 'stoomboot-kapitein.jpg',      quote: 'Volle kracht vooruit, Geil-sama!' },
+      { name: 'Marsepein Mahou-shoujo',  file: 'marsepein-mahou-shoujo.png',  quote: 'Transformatie: EXTRA GEIL!' },
+      { name: 'Chocoladeletter Senpai',  file: 'chocoladeletter-senpai.jpg',  quote: 'Ik ben een S. Voor Senpai.' },
+      { name: 'Stroopwafel Yandere',     file: 'stroopwafel-yandere.jpg',     quote: 'Je gaat nergens heen, Geil-kun.' }
     ];
 
     return waifus.map((w, idx) => {
-      const { canvas, ctx } = makeCtx(512, 1024);
-
-      const grad = ctx.createLinearGradient(0, 0, 0, 1024);
-      grad.addColorStop(0, w.bg[0]);
-      grad.addColorStop(1, w.bg[1]);
-      ctx.fillStyle = grad;
-      ctx.fillRect(0, 0, 512, 1024);
-
-      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-      ctx.lineWidth = 14;
-      ctx.strokeRect(10, 10, 492, 1004);
-
-      ctx.fillStyle = 'rgba(255,255,255,0.7)';
-      for (let s = 0; s < 30; s++) {
-        ctx.beginPath();
-        ctx.arc(rnd(30, 482), rnd(30, 994), rnd(3, 7), 0, TAU);
-        ctx.fill();
-      }
-
-      ctx.fillStyle = w.hair;
-      ctx.beginPath();
-      ctx.ellipse(256, 320, 160, 200, 0, 0, TAU);
-      ctx.fill();
-
-      if (w.ears) {
-        const ear = (x1, y1, x2, y2, x3, y3, ix1, iy1, ix2, iy2, ix3, iy3) => {
-          ctx.fillStyle = w.hair;
-          ctx.beginPath();
-          ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3);
-          ctx.fill();
-          ctx.fillStyle = '#ffb3c6';
-          ctx.beginPath();
-          ctx.moveTo(ix1, iy1); ctx.lineTo(ix2, iy2); ctx.lineTo(ix3, iy3);
-          ctx.fill();
-        };
-        ear(140, 220, 100, 100, 200, 160, 145, 200, 120, 120, 185, 165);
-        ear(372, 220, 412, 100, 312, 160, 367, 200, 392, 120, 327, 165);
-      }
-
-      if (w.mitre) {
-        ctx.fillStyle = '#b7094c';
-        ctx.beginPath();
-        ctx.moveTo(180, 220); ctx.lineTo(256, 60); ctx.lineTo(332, 220);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = '#ffb703';
-        ctx.fillRect(248, 90, 16, 110);
-        ctx.fillRect(216, 130, 80, 16);
-      }
-
-      ctx.fillStyle = '#ffeedd';
-      ctx.beginPath();
-      ctx.ellipse(256, 350, 125, 140, 0, 0, TAU);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(160, 390);
-      ctx.quadraticCurveTo(256, 520, 352, 390);
-      ctx.fill();
-
-      ctx.fillStyle = w.hair;
-      for (let b = 150; b <= 350; b += 35) {
-        ctx.beginPath();
-        ctx.moveTo(b, 240);
-        ctx.lineTo(b + 18, 340 + Math.sin(b) * 20);
-        ctx.lineTo(b + 38, 240);
-        ctx.fill();
-      }
-
-      ctx.fillStyle = 'rgba(255, 105, 180, 0.45)';
-      ctx.beginPath(); ctx.ellipse(190, 390, 28, 16, 0, 0, TAU); ctx.fill();
-      ctx.beginPath(); ctx.ellipse(322, 390, 28, 16, 0, 0, TAU); ctx.fill();
-
-      const drawEye = (cx, cy) => {
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath(); ctx.ellipse(cx, cy, 32, 42, 0, 0, TAU); ctx.fill();
-        ctx.fillStyle = w.eye;
-        ctx.beginPath(); ctx.ellipse(cx, cy + 4, 24, 32, 0, 0, TAU); ctx.fill();
-        ctx.fillStyle = '#111111';
-        ctx.beginPath(); ctx.arc(cx, cy + 4, 12, 0, TAU); ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath(); ctx.arc(cx - 8, cy - 8, 8, 0, TAU); ctx.fill();
-        ctx.beginPath(); ctx.arc(cx + 8, cy + 12, 4, 0, TAU); ctx.fill();
-        ctx.strokeStyle = '#222222';
-        ctx.lineWidth = 5;
-        ctx.beginPath(); ctx.arc(cx, cy - 8, 34, Math.PI * 1.1, Math.PI * 1.9); ctx.stroke();
-      };
-      drawEye(205, 340);
-      drawEye(307, 340);
-
-      ctx.strokeStyle = '#c9184a';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(256, 420, 14, 0.2, Math.PI - 0.2);
-      ctx.stroke();
-
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath();
-      ctx.moveTo(170, 520); ctx.lineTo(256, 480); ctx.lineTo(342, 520);
-      ctx.lineTo(380, 850); ctx.lineTo(132, 850);
-      ctx.closePath();
-      ctx.fill();
-
-      ctx.fillStyle = w.hair;
-      ctx.fillRect(180, 580, 152, 24);
-      ctx.beginPath(); ctx.arc(256, 592, 20, 0, TAU); ctx.fill();
-
-      ctx.fillStyle = '#222';
-      ctx.fillRect(180, 850, 60, 150);
-      ctx.fillRect(272, 850, 60, 150);
-
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.78)';
-      ctx.fillRect(20, 918, 472, 74);
-      ctx.strokeStyle = '#ffd700';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(20, 918, 472, 74);
-      ctx.fillStyle = '#ffffff';
-      ctx.textAlign = 'center';
-      ctx.font = 'bold 22px sans-serif';
-      ctx.fillText(w.name, 256, 948);
-      ctx.fillStyle = '#ffb3c6';
-      ctx.font = 'italic 16px sans-serif';
-      ctx.fillText(`"${w.quote}"`, 256, 976);
-
-      const texture = new THREE.CanvasTexture(canvas);
+      // Texture exists immediately so callers can hand it to a material
+      // before the image arrives; the image swap just updates it in place.
+      const texture = new THREE.Texture();
       texture.encoding = THREE.sRGBEncoding;
       texture.anisotropy = TextureFactory.maxAnisotropy;
 
-      return { id: idx, name: w.name, quote: w.quote, texture, canvas };
+      const img = new Image();
+      img.onload = () => {
+        texture.image = img;
+        texture.needsUpdate = true;
+      };
+      img.onerror = () => console.warn(`assets/pillows/${w.file} failed to load`);
+      img.src = `assets/pillows/${w.file}`;
+
+      return { id: idx, name: w.name, quote: w.quote, texture };
     });
   }
 }

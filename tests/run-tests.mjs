@@ -20,6 +20,7 @@ const {
   authoredLayout, eligiblePresentTiles
 } = await import('../src/layout.js');
 const { horrorAudio, TRACKS } = await import('../src/audio.js');
+const { Lantern, LANTERN_RANGE, LANTERN_ALARM } = await import('../src/lantern.js');
 
 const { existsSync, statSync } = await import('node:fs');
 const { fileURLToPath } = await import('node:url');
@@ -364,12 +365,22 @@ section('player');
   // The torch is a decision, not a starting condition: every run begins dark.
   const dark = newPlayer();
   check('a fresh player carries the torch off',
-    dark.flashlightOn === false && dark.flashlight.visible === false);
+    dark.flashlightOn === false && dark.flashlight.intensity === 0);
   dark.setFlashlight(true);
-  check('F lights it', dark.flashlightOn === true && dark.flashlight.visible === true);
+  check('F lights it', dark.flashlightOn === true && dark.flashlight.intensity > 0);
   dark.reset();
   check('a new run puts the torch back out',
-    dark.flashlightOn === false && dark.flashlight.visible === false);
+    dark.flashlightOn === false && dark.flashlight.intensity === 0);
+
+  // Hiding a shadow-casting light takes it out of the renderer's lighting
+  // state, which recompiles every shader in the scene — a hitch on a key the
+  // player presses all run. The light stays; the shadow pass is what parks.
+  check('a dark torch is still in the lighting state', dark.flashlight.visible === true);
+  check('and costs no shadow pass', dark.flashlight.shadow.autoUpdate === false);
+  dark.setFlashlight(true);
+  check('lighting it brings the shadow pass back',
+    dark.flashlight.visible === true && dark.flashlight.shadow.autoUpdate === true);
+  dark.setFlashlight(false);
 
   player.gait = 'still';
   check('standing still is silent', player.getNoiseRadius() === 0);
@@ -658,6 +669,7 @@ section('audio');
     horrorAudio.playVictoryTheme();
     horrorAudio.stopCues();
     horrorAudio.voice('title');
+    horrorAudio.playLanternTick(1);
   } catch (err) {
     threw = err;
   }
@@ -666,6 +678,108 @@ section('audio');
     horrorAudio.currentBed === null && !horrorAudio.soundtrackReady);
   check('so the synthesised music box keeps the scene',
     horrorAudio.musicEnabled !== false);
+}
+
+// --- Sint's lantaarntje --------------------------------------------------
+
+section('lantern');
+{
+  // The rate is the entire readout, so counting ticks over a held distance is
+  // the thing worth pinning down.
+  const ticksAt = (dist, seconds = 10, quiet = false) => {
+    const lamp = new Lantern();
+    let ticks = 0;
+    for (let i = 0; i < seconds * 60; i++) {
+      lamp.update(1 / 60, dist, quiet);
+      if (lamp.ticked) ticks++;
+    }
+    return ticks;
+  };
+
+  // Held at a distance long enough for the reading to stop chasing it.
+  const settled = (dist, quiet = false, seconds = 3) => {
+    const lamp = new Lantern();
+    for (let i = 0; i < seconds * 60; i++) lamp.update(1 / 60, dist, quiet);
+    return lamp;
+  };
+
+  const far = ticksAt(LANTERN_RANGE - 1);
+  const mid = ticksAt(LANTERN_RANGE / 2);
+  const near = ticksAt(1.5);
+
+  check('beyond its range the flame is out', ticksAt(LANTERN_RANGE + 4) === 0);
+  check('it ticks at the edge of its range', far > 0, `${far} in 10 s`);
+  check('faster halfway in', mid > far, `${far} -> ${mid}`);
+  check('and faster again on top of you', near > mid, `${mid} -> ${near}`);
+  check('but never past ten a second', near <= 100, `${near} in 10 s`);
+
+  // The interval has to fall the whole way in. A dial that plateaus is a dial
+  // that stops answering the one question it is for.
+  const intervals = [24, 18, 12, 6, 1].map(d => settled(d).interval);
+  check('the interval falls the whole way in',
+    intervals.every((v, i) => i === 0 || v < intervals[i - 1]),
+    intervals.map(v => v.toFixed(2)).join(' > '));
+
+  check('inside 11 m it goes to alarm', settled(LANTERN_ALARM - 2).alarm === true);
+  check('and outside it does not', settled(LANTERN_ALARM + 3).alarm === false);
+
+  // It reads straight-line distance and nothing else — no bearing, ever.
+  const lamp = settled(4);
+  check('it burns while he hunts', lamp.lit === true && lamp.proximity > 0);
+  check('and says nothing about direction',
+    !('bearing' in lamp) && !('x' in lamp) && !('z' in lamp));
+
+  for (let i = 0; i < 180; i++) lamp.update(1 / 60, 4, true);
+  check('the offering puts it out', lamp.lit === false && lamp.glow === 0);
+
+  // A frame long enough to hold several ticks must not fire several.
+  const stutter = new Lantern();
+  for (let i = 0; i < 120; i++) stutter.update(1 / 60, 2);
+  stutter.update(0.5, 2);
+  check('one long frame is still one tick', stutter.ticked === true && stutter.phase < 1);
+
+  // Whatever the sweep, the flame is something the stylesheet can use.
+  let lowest = Infinity;
+  let highest = -Infinity;
+  const sweep = new Lantern();
+  for (let i = 0; i < 900; i++) {
+    sweep.update(1 / 60, 1 + (i % 300) / 10);
+    lowest = Math.min(lowest, sweep.glow);
+    highest = Math.max(highest, sweep.glow);
+  }
+  check('the flame stays inside 0..1', lowest >= 0 && highest <= 1,
+    `${lowest.toFixed(3)} .. ${highest.toFixed(3)}`);
+
+  const spent = settled(4);
+  spent.reset();
+  check('a new run starts it cold',
+    spent.lit === false && spent.glow === 0 && spent.proximity === 0 && !spent.ticked);
+
+  // The wiring main.js does every frame, with the real Mr. Geil on the other
+  // end of it: his distance, straight into the lamp, and nothing else.
+  const walker = newPlayer();
+  const geil = new GeilEnemy(scene, map);
+  const belt = new Lantern();
+  const step = () => {
+    geil.update(1 / 60, walker, () => {});
+    belt.update(1 / 60, geil.distToPlayer, geil.state === STATE.PACIFIED);
+  };
+
+  const home = cell(5, 1);
+  walker.setPosition(home.x, home.z);
+  const berth = map.getRandomTileFrom(home.x, home.z, 34);
+  geil.x = berth.x;
+  geil.z = berth.z;
+  for (let i = 0; i < 30; i++) step();
+  check('with him across the ship the lamp is out', belt.lit === false,
+    `${geil.distToPlayer.toFixed(1)} m`);
+
+  geil.x = home.x + 5;
+  geil.z = home.z;
+  for (let i = 0; i < 120; i++) step();
+  check('with him five metres off it is going hard',
+    belt.lit === true && belt.alarm === true && belt.interval < 0.25,
+    `${belt.interval.toFixed(3)} s a tick at ${geil.distToPlayer.toFixed(1)} m`);
 }
 
 // --- A run's worth of ticks ---------------------------------------------

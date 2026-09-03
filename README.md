@@ -60,6 +60,28 @@ the altar is the hardest part of the run.
 
 ---
 
+## The lantaarntje
+
+Sinterklaas does not send you down empty-handed. Before you go below he hands
+you a Piet's belt lantern, and it sits in the top right of the HUD under the
+torch. The lamp is dead while Mr. Geil is more than 26 m off; inside that it
+ticks, and it ticks faster the nearer he gets — roughly one flash a second
+across the ship, ten a second when he is stood on top of you, and it turns from
+amber to red inside 11 m, the same distance the score already treats as him
+closing.
+
+That is the whole of it. It reads straight-line distance through the hull, so a
+bulkhead between you counts for nothing on the dial even though it counts for
+everything in the dark, and it never once tells you which way he is. Knowing he
+is near and not knowing where is most of what this game is for; the lamp is
+there to make you feel the room shrinking, not to hand you the answer.
+
+The rate is the readout, so it survives a player who cannot take the flashing:
+under `prefers-reduced-motion` the bulb holds a steady brightness that rises as
+he closes instead of strobing, and the tick keeps its rate either way.
+
+---
+
 ## Every run is a different boat
 
 The hull never changes — the corridors, the bulkheads, the cargo stacks and the
@@ -110,10 +132,10 @@ simply within 11 m; it does not go back until four and a half quiet seconds
 have passed, so one glance down a corridor does not flip the score twice.
 
 Everything else — footsteps, the engine, the tearing paper, the growl, the
-jumpscare — is still synthesised at runtime. If the mp3s never arrive, the
-synthesised music box that was carrying the game before them keeps playing and
-nothing else changes: `startVoice` is the only place a track begins, and it is
-also the only place that stands the music box down.
+lantaarntje's tick, the jumpscare — is still synthesised at runtime. If the
+mp3s never arrive, the synthesised music box that was carrying the game before
+them keeps playing and nothing else changes: `startVoice` is the only place a
+track begins, and it is also the only place that stands the music box down.
 
 ---
 
@@ -176,6 +198,7 @@ src/
   enemy.js          Mr. Geil: perception, memory, state machine
   items.js          presents and the pillows inside them
   tribute.js        the altar and the ending
+  lantern.js        Sint's lamp: how near he is, turned into a rate
   layout.js         the per-run ship: pakjes, his berth, his circuit, dead lanterns
   rng.js            seeded generator and the seed codes
   textures.js       every texture, drawn to canvas at runtime
@@ -192,14 +215,15 @@ map, player, enemy and items can be driven headlessly:
 node tests/run-tests.mjs
 ```
 
-141 assertions over seeds, generated layouts, line of sight, pathfinding,
-collision clearance, the stealth arithmetic, the offering, the soundtrack's
-files and its silence when there is no audio context, and a soak that runs the
-real update loop for 150 simulated seconds on eight unseen ships to catch a
-patrol waypoint that would wedge him against a crate. No dependencies; node 22
+160 assertions over seeds, generated layouts, line of sight, pathfinding,
+collision clearance, the stealth arithmetic, the offering, the lantaarntje's
+rate curve, the soundtrack's files and its silence when there is no audio
+context, and a soak that runs the real update loop for 150 simulated seconds on
+eight unseen ships to catch a patrol waypoint that would wedge him against a
+crate. No dependencies; node 22
 or newer, which detects the ES modules without a `package.json`.
 
-### Three invariants worth knowing
+### Four invariants worth knowing
 
 - **Every walkable cell centre must be standable by a body of radius 0.5, and
   every crossing between two of them must be walkable.** Pathfinding hops from
@@ -216,6 +240,13 @@ or newer, which detects the ES modules without a `package.json`.
   and run the harness before believing the result.
 - **Sneak must not be bound to `Ctrl`.** `Ctrl`+`W` closes the tab and the page
   never sees the event.
+- **The torch is dimmed, never hidden.** Setting `visible = false` on a
+  shadow-casting light takes it out of the renderer's lighting state, which
+  changes the program cache key, which recompiles every material in the scene.
+  Measured on r128 in this ship that is a 91 ms frame — six dropped — on a key
+  the player presses all run. `setFlashlight` moves `intensity` between 0 and
+  `TORCH_INTENSITY` and parks `shadow.autoUpdate` instead, and the same frame
+  costs 0.1 ms. Anything that adds or drops a light mid-run pays that price.
 
 ---
 

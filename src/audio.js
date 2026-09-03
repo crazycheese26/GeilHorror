@@ -593,6 +593,18 @@ class HorrorAudio {
     this.burst(0.03, 'highpass', 3200, 1.5, 0.06, 0.001, 0.02);
   }
 
+  // One tick of Sint's lantaarntje. Deliberately tiny and deliberately dry: it
+  // fires up to ten times a second when he is on top of you, and a game about
+  // listening cannot have its own HUD masking his footfalls. It rises in pitch
+  // as well as in rate, so the ear reads it even under the stalk bed.
+  playLanternTick(proximity = 0) {
+    if (!this.ready || this.muted) return;
+    const p = Math.max(0, Math.min(1, proximity));
+    // Brass and glass: a struck tine over the click of the little shutter.
+    this.tone('triangle', 1640 + p * 1100, 1180 + p * 900, 0.018 + p * 0.03, 0.001, 0.05);
+    this.burst(0.02, 'bandpass', 4200 + p * 1800, 2.2, 0.012 + p * 0.022, 0.001, 0.016);
+  }
+
   playTributeSuccess() {
     if (!this.ready || this.muted) return;
     const now = this.t;
