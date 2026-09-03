@@ -11,9 +11,12 @@ const UNWRAP_SECONDS = 1.7;
 const UNWRAP_NOISE_RADIUS = 30;
 
 export class ItemManager {
-  constructor(scene, map) {
+  // `rng` is the run's seeded generator, so the same seed puts the same pillow
+  // in the same pakje. Left out, presents fall back to Math.random.
+  constructor(scene, map, rng = null) {
     this.scene = scene;
     this.map = map;
+    this.rand = rng ? () => rng.next() : Math.random;
 
     this.pillows = TextureFactory.createAnimePillows();
     this.presents = [];
@@ -36,7 +39,13 @@ export class ItemManager {
   }
 
   buildPresents() {
-    const shuffled = [...this.pillows].sort(() => Math.random() - 0.5);
+    const shuffled = [...this.pillows];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(this.rand() * (i + 1));
+      const tmp = shuffled[i];
+      shuffled[i] = shuffled[j];
+      shuffled[j] = tmp;
+    }
 
     this.map.presentSpawns.forEach((spawn, idx) => {
       const offset = this.map.offsetTowardWall(spawn.r, spawn.c, 0.95);
@@ -51,7 +60,7 @@ export class ItemManager {
   createPresent(x, z, pillowData, id) {
     const group = new THREE.Group();
     group.position.set(x, 0, z);
-    group.rotation.y = Math.random() * Math.PI * 2;
+    group.rotation.y = this.rand() * Math.PI * 2;
 
     const boxGeo = new THREE.BoxGeometry(0.78, 0.6, 0.78);
     const boxMat = new THREE.MeshStandardMaterial({

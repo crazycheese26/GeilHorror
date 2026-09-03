@@ -8,14 +8,34 @@ import { ItemManager } from './items.js';
 import { TributeAltar } from './tribute.js';
 import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
+import { Rng, makeSeed, formatSeed, parseSeed } from './rng.js';
+import { generateRunLayout } from './layout.js';
 
 const SETTINGS_KEY = 'geil.settings.v1';
+
+// Sinterklaas, on deck, explaining the job. He is the reason there is an altar
+// in het ruim at all: the offering is his idea, not yours.
+const SINT_LINES = [
+  'Kind, listen. We are halfway to the wal and something came aboard with the pakjes. It lives in het ruim now. Mijnheer Geil.',
+  'I cannot go down there. The Pieten will not go down there. But the boat cannot dock with him awake in the hold, and by morning we have to be ashore.',
+  'He cannot be fought and he cannot be reasoned with. He can only be given something. Five of the pakjes below deck have an anime body pillow in them. Find five. Tear them open.',
+  'Carry them to the altar in het ruim and lay them out in a row, and he will want nothing else for the rest of the crossing. Do that and the hold goes quiet.',
+  'Hold your breath at every corner. Keep the torch off unless you must. And whatever you do — do not let him see you tearing the paper.'
+];
+
+// Typewriter speed, characters per second.
+const INTRO_CPS = 46;
+
+// How long the offering is left on screen before the ending is.
+const VICTORY_DELAY = 1.4;
 
 const DEFAULT_SETTINGS = {
   controlScheme: 'mouse',
   brightness: 40,
   sensitivity: 1.0,
-  volume: 75
+  volume: 75,
+  // Empty means a new ship every run. Anything typed here pins the layout.
+  seed: ''
 };
 
 class Game {
@@ -28,6 +48,18 @@ class Game {
     this.zoneTimer = 0;
     this.toastTimer = 0;
     this.deathTimer = 0;
+    this.victoryTimer = 0;
+
+    this.runSeed = 0;
+    this.runLayout = null;
+    this.runRng = null;
+
+    this.introIndex = 0;
+    this.introTyped = 0;
+    this.introDone = false;
+    // Music mood only falls back to the exploration bed after this many
+    // quiet seconds, so a near miss does not flap the score.
+    this.calmTimer = 0;
 
     this.cacheDom();
     this.initRenderer();
@@ -64,11 +96,27 @@ class Game {
     }
     document.body.dataset.scheme = this.settings.controlScheme;
 
-    if (this.dom.brightness) this.dom.brightness.value = this.settings.brightness;
-    if (this.dom.volume) this.dom.volume.value = this.settings.volume;
-    if (this.dom.sensitivity) this.dom.sensitivity.value = Math.round(this.settings.sensitivity * 100);
+    // Every slider for a setting, on whichever screen, shows the same value.
+    // The pause menu's copies used to be hardcoded to the defaults, so opening
+    // it after changing anything showed the wrong position, and nudging one
+    // snapped the setting back to it.
+    for (const el of this.dom.settingInputs) {
+      const value = String(this.settingValue(el.dataset.setting));
+      if (el.value !== value) el.value = value;
+    }
+    // Only write the seed box back when it disagrees, so typing in it does not
+    // fight the caret.
+    if (this.dom.seed && this.dom.seed.value !== this.settings.seed) {
+      this.dom.seed.value = this.settings.seed;
+    }
 
     this.saveSettings();
+  }
+
+  // The slider position for a setting, in the units the input is marked up in.
+  settingValue(name) {
+    if (name === 'sensitivity') return Math.round(this.settings.sensitivity * 100);
+    return this.settings[name];
   }
 
   cacheDom() {
@@ -76,6 +124,10 @@ class Game {
     this.dom = {
       hud: $('hud'),
       title: $('title-screen'),
+      intro: $('intro-screen'),
+      introLine: $('intro-line'),
+      introPips: $('intro-pips'),
+      introNext: $('btn-intro-next'),
       pause: $('pause-screen'),
       death: $('death-screen'),
       victory: $('victory-screen'),
@@ -95,10 +147,9 @@ class Game {
       hiddenMask: $('hidden-mask'),
       torch: $('torch-state'),
       objective: $('objective'),
-      brightness: $('set-brightness'),
-      volume: $('set-volume'),
-      sensitivity: $('set-sensitivity'),
-      sensRow: $('sens-row'),
+      settingInputs: document.querySelectorAll('[data-setting]'),
+      seed: $('set-seed'),
+      seedLabels: document.querySelectorAll('[data-run-seed]'),
       deathReason: $('death-reason')
     };
   }
@@ -140,18 +191,16 @@ class Game {
     }
 
     this.map = new SteamboatMap(this.scene);
+    this.planRun();
+
     this.player = new Player(this.camera, this.map, this.canvas, this.settings);
     this.enemy = new GeilEnemy(this.scene, this.map);
-    this.items = new ItemManager(this.scene, this.map);
+    this.enemy.applyRunLayout(this.runLayout);
+    this.enemy.reset();
+    this.items = new ItemManager(this.scene, this.map, this.runRng);
     this.altar = new TributeAltar(this.scene, this.map);
 
-    this.items.onUnwrapped = (pillow, x, z, radius) => {
-      this.showToast(pillow.name, pillow.quote);
-      this.enemy.hearNoiseAt(x, z, radius / 30);
-      this.enemy.setTier(this.items.collectedCount);
-      this.updateObjective();
-      this.renderPips();
-    };
+    this.attachItemHooks();
 
     this.player.onLockChange = (locked) => {
       if (!locked && this.state === 'PLAYING' && this.settings.controlScheme === 'mouse') {
@@ -160,17 +209,65 @@ class Game {
     };
   }
 
+  attachItemHooks() {
+    this.items.onUnwrapped = (pillow, x, z, radius) => {
+      this.showToast(pillow.name, pillow.quote);
+      this.enemy.hearNoiseAt(x, z, radius / 30);
+      this.enemy.setTier(this.items.collectedCount);
+      this.updateObjective();
+      this.renderPips();
+    };
+  }
+
+  // --- The run's ship --------------------------------------------------
+
+  // Roll (or re-roll) where the pakjes lie, where Mr. Geil starts, the circuit
+  // he paces and which lanterns are dead.
+  //
+  //   auto  - use the seed typed on the title screen, or roll one
+  //   keep  - sail the same ship again
+  //   fresh - deal a different ship, even if one was pinned
+  planRun(mode = 'auto') {
+    if (mode === 'fresh' && this.settings.seed) {
+      // Asking for a new ship while holding a pinned one means letting go of it.
+      this.settings.seed = '';
+      this.applySettings();
+    }
+
+    const pinned = parseSeed(this.settings.seed);
+    if (pinned !== null) this.runSeed = pinned;
+    else if (mode !== 'keep' || !this.runSeed) this.runSeed = makeSeed();
+
+    this.runRng = new Rng(this.runSeed);
+    this.runLayout = generateRunLayout(this.map, this.runRng);
+    this.map.applyRunLayout(this.runLayout);
+    this.showSeed();
+  }
+
+  showSeed() {
+    const code = formatSeed(this.runSeed);
+    for (const el of this.dom.seedLabels) el.textContent = code;
+  }
+
   bindUI() {
     const on = (id, ev, fn) => {
       const el = document.getElementById(id);
       if (el) el.addEventListener(ev, fn);
     };
 
-    on('btn-start', 'click', () => this.startGame());
+    // Starting from the title plans the run there and then, so a seed typed
+    // into the box takes effect on the ship you are about to walk into.
+    // Sint speaks first; the retry buttons skip him, because nobody wants the
+    // briefing again on their ninth attempt.
+    on('btn-start', 'click', () => this.beginIntro('auto'));
+    on('btn-intro-next', 'click', () => this.advanceIntro());
+    on('btn-intro-skip', 'click', () => this.startGame());
     on('btn-resume', 'click', () => this.resume());
     on('btn-quit', 'click', () => this.toMenu());
-    on('btn-retry', 'click', () => this.restart());
-    on('btn-play-again', 'click', () => this.restart());
+    on('btn-retry', 'click', () => this.restart('keep'));
+    on('btn-retry-new', 'click', () => this.restart('fresh'));
+    on('btn-play-again', 'click', () => this.restart('fresh'));
+    on('btn-again-seed', 'click', () => this.restart('keep'));
 
     for (const el of document.querySelectorAll('[data-scheme]')) {
       el.addEventListener('click', () => {
@@ -180,25 +277,165 @@ class Game {
       });
     }
 
-    on('set-brightness', 'input', (e) => {
-      this.settings.brightness = Number(e.target.value);
-      this.applySettings();
-    });
-    on('set-volume', 'input', (e) => {
-      this.settings.volume = Number(e.target.value);
-      this.applySettings();
-    });
-    on('set-sensitivity', 'input', (e) => {
-      this.settings.sensitivity = Number(e.target.value) / 100;
-      this.applySettings();
+    for (const el of this.dom.settingInputs) {
+      el.addEventListener('input', (e) => {
+        const value = Number(e.target.value);
+        const name = el.dataset.setting;
+        if (name === 'sensitivity') this.settings.sensitivity = value / 100;
+        else this.settings[name] = value;
+        this.applySettings();
+      });
+    }
+    on('set-seed', 'input', (e) => {
+      this.settings.seed = e.target.value;
+      this.saveSettings();
     });
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         if (this.state === 'PLAYING') this.pause();
         else if (this.state === 'PAUSED') this.resume();
+        else if (this.state === 'INTRO') this.toMenu();
+        return;
+      }
+      if (this.state === 'INTRO' && (e.key === 'Enter' || e.key === ' ')) {
+        e.preventDefault();
+        this.advanceIntro();
       }
     });
+
+    // Browsers will not let audio start before the player touches something,
+    // so the title theme waits for the first gesture anywhere on the page.
+    const prime = () => {
+      horrorAudio.init();
+      horrorAudio.resume();
+      this.updateMusic();
+    };
+    window.addEventListener('pointerdown', prime, { once: true });
+    window.addEventListener('keydown', prime, { once: true });
+  }
+
+  // --- Sint's briefing --------------------------------------------------
+
+  beginIntro(mode = 'auto') {
+    horrorAudio.init();
+    horrorAudio.resume();
+
+    // Deal the ship now, so a seed typed into the box is the boat he is
+    // describing.
+    this.resetRun(mode);
+
+    this.state = 'INTRO';
+    this.introIndex = 0;
+    this.introTyped = 0;
+    this.introDone = false;
+
+    this.player.setEnabled(false);
+    this.show(this.dom.title, false);
+    this.show(this.dom.hud, false);
+    this.show(this.dom.intro, true);
+    this.renderIntroPips();
+    this.updateMusic();
+  }
+
+  // First press finishes the line being typed; the next one moves on.
+  advanceIntro() {
+    if (this.state !== 'INTRO') return;
+
+    if (!this.introDone) {
+      this.introTyped = SINT_LINES[this.introIndex].length;
+      this.introDone = true;
+      this.paintIntroLine();
+      return;
+    }
+    if (this.introIndex >= SINT_LINES.length - 1) {
+      this.startGame();
+      return;
+    }
+    this.introIndex++;
+    this.introTyped = 0;
+    this.introDone = false;
+    this.paintIntroLine();
+    this.renderIntroPips();
+    horrorAudio.playClick();
+  }
+
+  updateIntro(delta) {
+    if (this.introDone) return;
+    const line = SINT_LINES[this.introIndex];
+    const before = Math.floor(this.introTyped);
+    this.introTyped = Math.min(line.length, this.introTyped + delta * INTRO_CPS);
+    if (this.introTyped >= line.length) this.introDone = true;
+    // Only touch the DOM on a frame that actually reveals a character.
+    if (this.introDone || Math.floor(this.introTyped) !== before) this.paintIntroLine();
+  }
+
+  paintIntroLine() {
+    const line = SINT_LINES[this.introIndex];
+    if (this.dom.introLine) {
+      this.dom.introLine.textContent = line.slice(0, Math.floor(this.introTyped));
+      this.dom.introLine.classList.toggle('is-typing', !this.introDone);
+    }
+    if (this.dom.introNext) {
+      this.dom.introNext.textContent =
+        this.introDone && this.introIndex >= SINT_LINES.length - 1 ? 'Ga naar beneden' : 'Verder';
+    }
+  }
+
+  renderIntroPips() {
+    if (!this.dom.introPips) return;
+    this.dom.introPips.innerHTML = '';
+    for (let i = 0; i < SINT_LINES.length; i++) {
+      const pip = document.createElement('span');
+      pip.className = 'pip' + (i <= this.introIndex ? ' is-filled' : '');
+      this.dom.introPips.appendChild(pip);
+    }
+  }
+
+  // --- Score ------------------------------------------------------------
+
+  // One place decides what should be playing, so every transition agrees.
+  updateMusic() {
+    switch (this.state) {
+      case 'MENU':
+      case 'INTRO':
+        horrorAudio.stopCues();
+        horrorAudio.setBed('title', 1.0);
+        break;
+      case 'PLAYING':
+      case 'PAUSED':
+        horrorAudio.stopCues();
+        if (!horrorAudio.currentBed || horrorAudio.currentBed === 'title') {
+          horrorAudio.setBed('explore', 1.6);
+          this.calmTimer = 0;
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Explore and stalk trade places on how much he actually knows, with a hold
+  // on the way back down so one glance does not flip the score twice.
+  updateMusicMood(delta) {
+    const e = this.enemy;
+    if (e.state === STATE.PACIFIED) {
+      horrorAudio.setBed('explore');
+      return;
+    }
+
+    const hunting = e.state === STATE.CHASE || e.state === STATE.SEARCH ||
+                    e.state === STATE.SUSPICIOUS;
+    const closing = e.distToPlayer < 11;
+
+    if (hunting || e.awareness > 0.3 || closing) {
+      this.calmTimer = 4.5;
+      horrorAudio.setBed('stalk');
+    } else if (this.calmTimer > 0) {
+      this.calmTimer -= delta;
+    } else {
+      horrorAudio.setBed('explore');
+    }
   }
 
   // --- State transitions -----------------------------------------------
@@ -212,12 +449,15 @@ class Game {
     horrorAudio.resume();
 
     this.show(this.dom.title, false);
+    this.show(this.dom.intro, false);
     this.show(this.dom.pause, false);
     this.show(this.dom.death, false);
     this.show(this.dom.victory, false);
     this.show(this.dom.hud, true);
 
     this.state = 'PLAYING';
+    this.calmTimer = 0;
+    this.updateMusic();
     this.player.setEnabled(true);
     if (this.settings.controlScheme === 'mouse') this.player.requestPointerLock();
 
@@ -233,6 +473,7 @@ class Game {
     this.player.setEnabled(false);
     this.player.exitPointerLock();
     horrorAudio.setThreat(0);
+    // The bed keeps playing while paused; only the synthesised tension stops.
     this.show(this.dom.pause, true);
   }
 
@@ -246,41 +487,45 @@ class Game {
   }
 
   toMenu() {
-    this.resetRun();
+    // Hold the ship as it was; pressing start plans the next one.
+    this.resetRun('keep');
     this.state = 'MENU';
     this.player.setEnabled(false);
     this.player.exitPointerLock();
     this.show(this.dom.pause, false);
+    this.show(this.dom.intro, false);
     this.show(this.dom.hud, false);
     this.show(this.dom.title, true);
+    this.updateMusic();
   }
 
-  restart() {
-    this.resetRun();
+  // 'keep' replays the layout you just lost on, which is the difference between
+  // learning a ship and rolling the dice again.
+  restart(mode = 'auto') {
+    this.resetRun(mode);
     this.startGame();
   }
 
-  resetRun() {
+  resetRun(mode = 'auto') {
+    this.planRun(mode);
+
     this.items.dispose();
-    this.items = new ItemManager(this.scene, this.map);
-    this.items.onUnwrapped = (pillow, x, z, radius) => {
-      this.showToast(pillow.name, pillow.quote);
-      this.enemy.hearNoiseAt(x, z, radius / 30);
-      this.enemy.setTier(this.items.collectedCount);
-      this.updateObjective();
-      this.renderPips();
-    };
+    this.items = new ItemManager(this.scene, this.map, this.runRng);
+    this.attachItemHooks();
 
     this.altar.reset();
     this.player.reset();
+    this.enemy.applyRunLayout(this.runLayout);
     this.enemy.reset();
 
     horrorAudio.setThreat(0);
+    horrorAudio.stopCues();
     this.show(this.dom.death, false);
     this.show(this.dom.victory, false);
     this.show(this.dom.danger, false);
     this.show(this.dom.hiddenMask, false);
     this.deathTimer = 0;
+    this.victoryTimer = 0;
   }
 
   triggerDeath() {
@@ -296,6 +541,12 @@ class Game {
     this.player.exitPointerLock();
 
     horrorAudio.playJumpscare();
+    // Let the scream have the room to itself before the theme comes in under
+    // the death screen's own fade.
+    horrorAudio.setBed(null, 0.5);
+    setTimeout(() => {
+      if (this.state === 'DEAD') horrorAudio.playGameOverTheme();
+    }, 900);
 
     if (this.dom.deathReason) {
       this.dom.deathReason.textContent = this.player.isHidden
@@ -311,9 +562,11 @@ class Game {
   triggerVictory() {
     if (this.state !== 'PLAYING') return;
     this.state = 'VICTORY';
+    this.victoryTimer = 0;
     this.player.setEnabled(false);
     this.player.exitPointerLock();
     horrorAudio.setThreat(0);
+    horrorAudio.playVictoryTheme();
     this.show(this.dom.hud, false);
     this.show(this.dom.victory, true);
   }
@@ -339,10 +592,20 @@ class Game {
 
     if (altarState.canOffer && altarState.progress >= 1 && !this.altar.isOffered) {
       this.altar.complete(this.enemy);
-      setTimeout(() => this.triggerVictory(), 1400);
+      // A beat to watch him take the offering before the screen comes up. It
+      // runs on the loop rather than a timer, because pausing in that gap has
+      // to delay the ending, not cancel it: the altar is spent by then, so a
+      // victory that never fires cannot be re-earned.
+      this.victoryTimer = VICTORY_DELAY;
+    }
+
+    if (this.victoryTimer > 0) {
+      this.victoryTimer -= delta;
+      if (this.victoryTimer <= 0) this.triggerVictory();
     }
 
     this.enemy.update(delta, this.player, () => this.triggerDeath());
+    this.updateMusicMood(delta);
 
     this.updateHud(pos, itemState, altarState);
     this.updateZone(pos, delta);
@@ -523,6 +786,7 @@ class Game {
 
     const delta = Math.min(this.clock.getDelta(), 0.1);
     this.update(delta);
+    if (this.state === 'INTRO') this.updateIntro(delta);
 
     // The camera keeps drifting toward him on the death screen.
     if (this.state === 'DEAD') {

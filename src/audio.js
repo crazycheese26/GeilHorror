@@ -1,8 +1,29 @@
-// Procedural sound. Everything is synthesised at runtime through the Web Audio
-// API, so there are no audio files to 404 on a static host.
+// Sound: a recorded soundtrack over a fully synthesised sfx layer.
 //
-// Buses: master -> compressor -> destination, with ambience, music and sfx
-// underneath so the mix can duck without touching individual voices.
+// Every effect - footsteps, the engine, the tearing paper, the jumpscare - is
+// built at runtime through the Web Audio API, so the game still has a voice if
+// the mp3s never arrive. The soundtrack in assets/audio is the only thing on
+// disk, and it is streamed through the same graph so one volume slider governs
+// the lot.
+//
+// Buses: master -> compressor -> destination, with ambience, sfx, the
+// synthesised music box and the soundtrack underneath, so the mix can duck
+// without touching individual voices.
+
+// The soundtrack. `bed` tracks loop and crossfade into one another; the rest
+// are one-shots that play over whatever is underneath.
+export const TRACKS = {
+  title:    { src: 'assets/audio/title.mp3',    bed: true,  gain: 0.85 },
+  explore:  { src: 'assets/audio/explore.mp3',  bed: true,  gain: 0.80 },
+  stalk:    { src: 'assets/audio/stalk.mp3',    bed: true,  gain: 0.95 },
+  stinger:  { src: 'assets/audio/stinger.mp3',  bed: false, gain: 1.00 },
+  gameover: { src: 'assets/audio/gameover.mp3', bed: false, gain: 0.95 },
+  victory:  { src: 'assets/audio/victory.mp3',  bed: false, gain: 0.95 }
+};
+
+// How long the exploration bed and the stalk bed take to trade places. Long
+// enough that you notice the mood turn rather than the cut.
+const BED_FADE = 2.2;
 
 class HorrorAudio {
   constructor() {
@@ -19,6 +40,12 @@ class HorrorAudio {
     this.lastTear = 0;
     this.lastGeilStep = 0;
     this.lastDetected = 0;
+
+    // Soundtrack. Built in init(); until then every music call is a no-op, so
+    // the headless harness and a browser with no Audio element both survive.
+    this.voices = new Map();
+    this.currentBed = null;
+    this.soundtrackReady = false;
   }
 
   init() {
@@ -53,6 +80,12 @@ class HorrorAudio {
       this.music = this.ctx.createGain();
       this.music.gain.value = 0.55;
       this.music.connect(this.master);
+
+      // The recorded soundtrack rides its own bus so a stinger can duck the
+      // bed underneath it without touching the sfx.
+      this.soundtrack = this.ctx.createGain();
+      this.soundtrack.gain.value = 0.9;
+      this.soundtrack.connect(this.master);
 
       this.ready = true;
 
@@ -288,6 +321,145 @@ class HorrorAudio {
 
     osc.start(now); osc.stop(now + 1.6);
     overtone.start(now); overtone.stop(now + 0.5);
+  }
+
+  // --- The soundtrack ---------------------------------------------------
+  //
+  // Each track is an <audio> element routed through its own gain node, so the
+  // beds can crossfade and a one-shot can duck whatever is under it. Elements
+  // stream, so nothing has to be decoded up front.
+
+  // Lazily wire one track into the graph. Returns null when the browser has no
+  // Audio element (the harness) or the file cannot be routed.
+  voice(name) {
+    if (!this.ready || !this.soundtrack) return null;
+    if (this.voices.has(name)) return this.voices.get(name);
+
+    const spec = TRACKS[name];
+    if (!spec || typeof Audio === 'undefined') return null;
+
+    try {
+      const el = new Audio(spec.src);
+      el.loop = !!spec.bed;
+      el.preload = 'auto';
+      el.crossOrigin = 'anonymous';
+
+      const gain = this.ctx.createGain();
+      gain.gain.value = 0;
+      gain.connect(this.soundtrack);
+      this.ctx.createMediaElementSource(el).connect(gain);
+
+      const v = { el, gain, spec, fadeOutAt: 0 };
+      this.voices.set(name, v);
+      return v;
+    } catch (err) {
+      console.warn(`Track ${name} could not be routed:`, err);
+      this.voices.set(name, null);
+      return null;
+    }
+  }
+
+  // A track is only ever started here, so a rejected play() promise - autoplay
+  // policy, a missing file - degrades to silence instead of an unhandled
+  // rejection, and leaves the synthesised music box carrying the scene.
+  startVoice(v, fade) {
+    const target = v.spec.gain;
+    v.gain.gain.cancelScheduledValues(this.t);
+    v.gain.gain.setValueAtTime(Math.max(0.0001, v.gain.gain.value), this.t);
+    v.gain.gain.linearRampToValueAtTime(target, this.t + Math.max(0.02, fade));
+
+    const playing = v.el.currentTime > 0 && !v.el.paused && !v.el.ended;
+    if (playing) return;
+
+    const p = v.el.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(err => console.warn(`Track ${v.spec.src} would not start:`, err));
+    }
+    // The recorded score replaces the synthesised music box rather than
+    // playing on top of it. If nothing ever starts, the box keeps playing.
+    this.musicEnabled = false;
+    this.soundtrackReady = true;
+  }
+
+  stopVoice(v, fade) {
+    if (!v || v.el.paused) return;
+    const at = this.t;
+    v.gain.gain.cancelScheduledValues(at);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, at);
+    v.gain.gain.linearRampToValueAtTime(0.0001, at + Math.max(0.02, fade));
+
+    // Pause once it is actually silent, but only if nothing restarted it in
+    // the meantime - the token is what makes a fade-out interruptible.
+    const token = ++v.fadeOutAt;
+    setTimeout(() => {
+      if (v.fadeOutAt !== token) return;
+      v.el.pause();
+      if (!v.spec.bed) v.el.currentTime = 0;
+    }, Math.max(20, fade * 1000 + 60));
+  }
+
+  // Swap the looping bed. Passing null fades the music out entirely.
+  setBed(name, fade = BED_FADE) {
+    if (!this.ready) return;
+    if (this.currentBed === name) return;
+
+    const previous = this.currentBed;
+    this.currentBed = name;
+
+    for (const [key, v] of this.voices) {
+      if (v && v.spec.bed && key !== name) this.stopVoice(v, fade);
+    }
+    if (!name) return;
+
+    const v = this.voice(name);
+    if (!v) return;
+    // Beds resume where they left off, except the title theme, which should
+    // open on its first note every time you come back to the menu.
+    if (name === 'title' && previous !== 'title') v.el.currentTime = 0;
+    v.fadeOutAt++;
+    this.startVoice(v, fade);
+  }
+
+  // One-shots: the ending themes and the sighting stinger. `duck` pulls the
+  // bed down underneath so the cue lands.
+  playCue(name, { restart = true, duck = 0, fade = 0.05 } = {}) {
+    if (!this.ready || this.muted) return;
+    const v = this.voice(name);
+    if (!v) return;
+    if (restart) v.el.currentTime = 0;
+    v.fadeOutAt++;
+    this.startVoice(v, fade);
+
+    if (duck > 0 && this.soundtrack) {
+      const at = this.t;
+      this.soundtrack.gain.cancelScheduledValues(at);
+      this.soundtrack.gain.setValueAtTime(this.soundtrack.gain.value, at);
+      this.soundtrack.gain.linearRampToValueAtTime(0.9 * (1 - duck), at + 0.12);
+      this.soundtrack.gain.linearRampToValueAtTime(0.9, at + 0.12 + 2.4);
+    }
+  }
+
+  // He has just laid eyes on you: a sting over the top of the bed.
+  playSightingStinger() {
+    this.playCue('stinger', { duck: 0.45 });
+  }
+
+  playGameOverTheme() {
+    this.setBed(null, 0.35);
+    this.playCue('gameover', { fade: 0.2 });
+  }
+
+  playVictoryTheme() {
+    this.setBed(null, 1.2);
+    this.playCue('victory', { fade: 0.4 });
+  }
+
+  // Stop every ending cue, for a restart that does not wait for one to end.
+  stopCues(fade = 0.3) {
+    if (!this.ready) return;
+    for (const [, v] of this.voices) {
+      if (v && !v.spec.bed) this.stopVoice(v, fade);
+    }
   }
 
   // --- Game hooks -------------------------------------------------------

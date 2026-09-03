@@ -21,7 +21,13 @@ export const STATE = {
   PACIFIED: 'PACIFIED'
 };
 
-const SPAWN_CELL = { c: 9, r: 17 };
+// Where he stands before a run is planned. A seeded layout overwrites both
+// this and his patrol circuit (see layout.js).
+const DEFAULT_SPAWN_CELL = { c: 9, r: 17 };
+
+// How often he wanders off his circuit. Enough that the route is worth
+// learning, not so much that it is a timetable you can set a watch by.
+const DETOUR_CHANCE = 0.25;
 
 export class GeilEnemy {
   constructor(scene, map) {
@@ -31,8 +37,15 @@ export class GeilEnemy {
     this.width = 3.2;
     this.height = 1.66;
 
-    this.x = SPAWN_CELL.c * map.cellSize;
-    this.z = SPAWN_CELL.r * map.cellSize;
+    this.spawn = {
+      x: DEFAULT_SPAWN_CELL.c * map.cellSize,
+      z: DEFAULT_SPAWN_CELL.r * map.cellSize
+    };
+    this.patrolRoute = [];
+    this.routeIndex = 0;
+
+    this.x = this.spawn.x;
+    this.z = this.spawn.z;
     this.y = this.height / 2 + 0.05;
     this.facing = 0;
 
@@ -284,6 +297,8 @@ export class GeilEnemy {
       this.poi = { x: player.x, z: player.z };
       if (prev !== STATE.CHASE) this.justDetected = true;
       horrorAudio.playDetected();
+      // The line-of-sight sting, over the top of whatever bed is running.
+      horrorAudio.playSightingStinger();
     } else if (next === STATE.SUSPICIOUS) {
       this.poi = this.lastKnown;
       this.lookAroundTimer = 1.8;
@@ -296,6 +311,7 @@ export class GeilEnemy {
     } else if (next === STATE.PATROL) {
       this.awareness = Math.min(this.awareness, 0.2);
       this.lastKnown = null;
+      this.resumeRouteNearby();
       this.pickPatrolTarget();
     }
   }
@@ -336,11 +352,47 @@ export class GeilEnemy {
     // Long legs and a short pause: he should read as pacing the ship, not
     // loitering. Short waypoints plus long look-arounds leave him standing
     // still for a third of the time, which makes the boat feel empty.
-    const tile = this.map.getRandomTileFrom(this.x, this.z, 16);
+    const tile = this.nextPatrolTile();
     this.poi = { x: tile.x, z: tile.z };
     this.lookAroundTimer = 0.9 + Math.random() * 1.1;
     this.repathTimer = 0;
     this.cachedStep = null;
+  }
+
+  // He walks this run's circuit, with the odd detour. A route the player can
+  // learn is the point: it turns hiding into timing rather than luck.
+  nextPatrolTile() {
+    if (!this.patrolRoute.length || Math.random() < DETOUR_CHANCE) {
+      return this.map.getRandomTileFrom(this.x, this.z, 16);
+    }
+    const tile = this.patrolRoute[this.routeIndex % this.patrolRoute.length];
+    this.routeIndex = (this.routeIndex + 1) % this.patrolRoute.length;
+    return tile;
+  }
+
+  // Coming off a search he is nowhere near where he left the circuit, so he
+  // rejoins it at the leg after the nearest waypoint instead of doubling back.
+  resumeRouteNearby() {
+    if (!this.patrolRoute.length) return;
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < this.patrolRoute.length; i++) {
+      const w = this.patrolRoute[i];
+      const d = Math.hypot(w.x - this.x, w.z - this.z);
+      if (d < bestDist) { bestDist = d; best = i; }
+    }
+    this.routeIndex = (best + 1) % this.patrolRoute.length;
+  }
+
+  // --- Run plan --------------------------------------------------------
+
+  applyRunLayout(layout) {
+    if (!layout) return;
+    if (layout.enemySpawn) {
+      this.spawn = { x: layout.enemySpawn.x, z: layout.enemySpawn.z };
+    }
+    this.patrolRoute = (layout.patrolRoute || []).map(w => ({ x: w.x, z: w.z }));
+    this.routeIndex = 0;
   }
 
   reached(point, radius) {
@@ -507,9 +559,10 @@ export class GeilEnemy {
   }
 
   reset() {
-    this.x = SPAWN_CELL.c * this.map.cellSize;
-    this.z = SPAWN_CELL.r * this.map.cellSize;
+    this.x = this.spawn.x;
+    this.z = this.spawn.z;
     this.facing = 0;
+    this.routeIndex = 0;
     this.state = STATE.PATROL;
     this.awareness = 0;
     this.tier = 0;

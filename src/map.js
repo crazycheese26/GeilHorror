@@ -50,7 +50,15 @@ export class SteamboatMap {
 
     this.playerStart = { x: 1 * this.cellSize, z: 1 * this.cellSize };
     this.altarLocation = { x: 10 * this.cellSize, z: 11.5 * this.cellSize };
+    // The altar's footing. tribute.js draws the shrine to these half-extents
+    // and the map collides against them, so the stone the player sees and the
+    // stone they bump into cannot drift apart.
+    this.altarFootprint = { halfX: 1.9, halfZ: 1.2 };
+    // The 'P' cells in the grid above. They are the fallback layout; a run
+    // normally overwrites presentSpawns from a seeded plan (see layout.js).
+    this.authoredPresentSpawns = [];
     this.presentSpawns = [];
+    this.runLayout = null;
     this.walkableTiles = [];
     this.hidingSpots = [];
     this.colliders = [];
@@ -127,13 +135,47 @@ export class SteamboatMap {
         const tile = { r, c, x, z };
 
         if (val === 'S') this.playerStart = { x, z };
-        if (val === 'P') this.presentSpawns.push(tile);
+        if (val === 'P') this.authoredPresentSpawns.push(tile);
         this.walkableTiles.push(tile);
       }
     }
 
+    this.presentSpawns = [...this.authoredPresentSpawns];
+
     // Shrine sits between the two altar rows so the player faces it head-on.
     this.altarLocation = { x: 10 * this.cellSize, z: 11.5 * this.cellSize };
+  }
+
+  // --- Per-run plan ----------------------------------------------------
+
+  // Swap in a seeded layout: where the pakjes go and which lanterns are dead.
+  // Mr. Geil reads his own spawn and circuit straight off the same plan.
+  applyRunLayout(layout) {
+    if (!layout) return;
+    this.runLayout = layout;
+
+    if (layout.presents && layout.presents.length) {
+      this.presentSpawns = layout.presents.map(p => ({
+        r: p.r, c: p.c,
+        x: p.x !== undefined ? p.x : p.c * this.cellSize,
+        z: p.z !== undefined ? p.z : p.r * this.cellSize
+      }));
+    }
+
+    if (layout.lanternsAlive && layout.lanternsAlive.length === this.lanternSpots.length) {
+      this.lanternSpots.forEach((spot, i) => {
+        spot.alive = layout.lanternsAlive[i];
+        spot.bulbMat.color.setHex(spot.alive ? 0xffb268 : 0x241a12);
+      });
+      // Drop any pooled light bound to a fixture that just died.
+      this.lanternRepickTimer = 0;
+      for (const light of this.lanternPool) {
+        if (light.userData.spot && !light.userData.spot.alive) {
+          light.visible = false;
+          light.userData.spot = null;
+        }
+      }
+    }
   }
 
   // --- Geometry --------------------------------------------------------
@@ -171,9 +213,23 @@ export class SteamboatMap {
 
     this.buildWalls();
     this.buildCargoStacks();
+    this.buildAltarFooting();
     this.buildPipes();
     this.buildLanterns();
     this.buildLighting();
+
+    // Every collider is in by now, so the crossings can be worked out.
+    this.buildEdgeBlocks();
+  }
+
+  // The shrine's altar is geometry tribute.js draws, but it is the map that
+  // has to stop bodies walking through it.
+  buildAltarFooting() {
+    const { halfX, halfZ } = this.altarFootprint;
+    this.colliders.push({
+      minX: this.altarLocation.x - halfX, maxX: this.altarLocation.x + halfX,
+      minZ: this.altarLocation.z - halfZ, maxZ: this.altarLocation.z + halfZ
+    });
   }
 
   buildWalls() {
@@ -519,19 +575,91 @@ export class SteamboatMap {
     return this.grid[r][c] !== 1;
   }
 
+  // Pathfinding hops from one cell centre to the next, so a prop lying across
+  // the boundary between two walkable cells blocks a move the grid alone calls
+  // legal — and whoever takes that move walks into the furniture and stops.
+  // The altar is the one that does it: it straddles the two shrine rows, so
+  // the short way in is through the stone and the way round is past it.
+  // Worked out once here, then read for free by floodFrom and findPathNextStep.
+  buildEdgeBlocks(radius = 0.5) {
+    this.blockedEdges = new Uint8Array(this.rows * this.cols);
+    for (let r = 0; r < this.rows; r++) {
+      for (let c = 0; c < this.cols; c++) {
+        if (!this.isWalkableCell(r, c)) continue;
+        for (let d = 0; d < 4; d++) {
+          const nr = r + (d === 0 ? -1 : d === 1 ? 1 : 0);
+          const nc = c + (d === 2 ? -1 : d === 3 ? 1 : 0);
+          if (!this.isWalkableCell(nr, nc)) continue;
+          if (this.edgeIsBlocked(r, c, nr, nc, radius)) {
+            this.blockedEdges[r * this.cols + c] |= 1 << d;
+          }
+        }
+      }
+    }
+  }
+
+  // Sampled at the boundary and the quarter points either side of it, which is
+  // as fine as it needs to be for a prop wide enough to stop anybody.
+  edgeIsBlocked(r, c, nr, nc, radius) {
+    for (const t of [0.25, 0.5, 0.75]) {
+      const x = (c + (nc - c) * t) * this.cellSize;
+      const z = (r + (nr - r) * t) * this.cellSize;
+      if (this.checkCollision(x, z, radius)) return true;
+    }
+    return false;
+  }
+
+  // Can a body cross from this cell into its neighbour in direction `d`?
+  canStep(r, c, d) {
+    if (!this.blockedEdges) return true;
+    return (this.blockedEdges[r * this.cols + c] & (1 << d)) === 0;
+  }
+
   getRandomWalkableTile() {
     return this.walkableTiles[Math.floor(Math.random() * this.walkableTiles.length)];
   }
 
-  // Pick a walkable tile at least `minDist` away from a point.
-  getRandomTileFrom(x, z, minDist) {
-    const candidates = this.walkableTiles.filter(t => {
+  // Pick a walkable tile at least `minDist` away from a point. An optional
+  // filter narrows the pool; if nothing passes both, the distance goes first
+  // and the filter second, so a caller always gets a tile back.
+  getRandomTileFrom(x, z, minDist, filter = null) {
+    const matching = filter ? this.walkableTiles.filter(filter) : this.walkableTiles;
+    const candidates = matching.filter(t => {
       const dx = t.x - x;
       const dz = t.z - z;
       return dx * dx + dz * dz > minDist * minDist;
     });
-    const pool = candidates.length ? candidates : this.walkableTiles;
+    const pool = candidates.length ? candidates
+      : (matching.length ? matching : this.walkableTiles);
     return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // Every cell reachable on foot from a point, as `r * cols + c` indices.
+  // Used to prove a generated layout is not stranding anything behind a wall.
+  floodFrom(x, z) {
+    const start = this.worldToCell(x, z);
+    const seen = new Set();
+    if (!this.isWalkableCell(start.r, start.c)) return seen;
+
+    const stack = [start.r * this.cols + start.c];
+    seen.add(stack[0]);
+
+    while (stack.length) {
+      const idx = stack.pop();
+      const r = (idx / this.cols) | 0;
+      const c = idx - r * this.cols;
+
+      for (let d = 0; d < 4; d++) {
+        const nr = r + (d === 0 ? -1 : d === 1 ? 1 : 0);
+        const nc = c + (d === 2 ? -1 : d === 3 ? 1 : 0);
+        if (!this.isWalkableCell(nr, nc) || !this.canStep(r, c, d)) continue;
+        const nIdx = nr * this.cols + nc;
+        if (seen.has(nIdx)) continue;
+        seen.add(nIdx);
+        stack.push(nIdx);
+      }
+    }
+    return seen;
   }
 
   // BFS to the target, returning the world position of the next cell to walk
@@ -567,7 +695,7 @@ export class SteamboatMap {
       for (let d = 0; d < 4; d++) {
         const nr = r + (d === 0 ? -1 : d === 1 ? 1 : 0);
         const nc = c + (d === 2 ? -1 : d === 3 ? 1 : 0);
-        if (!this.isWalkableCell(nr, nc)) continue;
+        if (!this.isWalkableCell(nr, nc) || !this.canStep(r, c, d)) continue;
         const nIdx = nr * this.cols + nc;
         if (cameFrom[nIdx] !== -1) continue;
         cameFrom[nIdx] = idx;

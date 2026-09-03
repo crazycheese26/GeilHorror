@@ -45,7 +45,9 @@ export class Player {
     this.speed = 0;
     this.bobTimer = 0;
 
-    this.flashlightOn = true;
+    // Off until the player throws the switch: the torch is a decision, not a
+    // starting condition.
+    this.flashlightOn = false;
     this.isHidden = false;
     this.hideSpot = null;
     this.oneShotNoise = 0;
@@ -81,6 +83,7 @@ export class Player {
     this.flashlight.shadow.camera.far = 32;
     this.flashlight.shadow.bias = -0.0018;
     this.flashlight.position.set(0.22, -0.16, 0);
+    this.flashlight.visible = this.flashlightOn;
 
     this.flashlightTarget = new THREE.Object3D();
     this.flashlightTarget.position.set(0, 0, -6);
@@ -93,10 +96,12 @@ export class Player {
     this.beamSway = { x: 0, y: 0 };
   }
 
-  setFlashlight(on) {
+  // silent skips the switch sound, for setting a run up rather than the player
+  // actually thumbing the torch.
+  setFlashlight(on, silent = false) {
     this.flashlightOn = on;
     this.flashlight.visible = on;
-    horrorAudio.playClick();
+    if (!silent) horrorAudio.playClick();
   }
 
   toggleFlashlight() {
@@ -377,7 +382,12 @@ export class Player {
     if (this.isHidden) return 0;
     let factor = 1;
     if (this.flashlightOn) factor *= 1.85;   // the beam gives you away
-    if (this.gait === 'sneak') factor *= 0.55;
+    // Crouching is a stance, not a gait. Reading the gait here meant a player
+    // frozen behind a stack was as visible as one standing upright, even
+    // though the camera was down and the cargo was already breaking his line
+    // of sight — the one thing the game tells you to do was the one thing that
+    // stopped working the moment you stopped moving.
+    if (this.keys.sneak) factor *= 0.55;
     else if (this.gait === 'sprint') factor *= 1.25;
     return factor;
   }
@@ -429,7 +439,7 @@ export class Player {
     this.hideSpot = null;
     this.gait = 'still';
     this.bobTimer = 0;
-    this.setFlashlight(true);
+    this.setFlashlight(false, true);
     this.releaseAllKeys();
     this.syncCamera();
   }

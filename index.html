@@ -67,17 +67,18 @@
         <header class="masthead">
           <p class="kicker">De donkere gangen van de stoomboot</p>
           <h1>GEIL</h1>
-          <p class="tagline">Mr. Geil is hungry. Five anime body pillows will change his mind.</p>
+          <p class="tagline">Sinterklaas cannot go below deck. You can. Five anime body pillows on the altar and the boat comes safely ashore.</p>
         </header>
 
         <img src="assets/geil_original.png" alt="The original sketch of Mr. Geil" class="sketch">
 
         <p class="brief">
-          He hunts by sight and sound, and he remembers where he last saw you.
-          Break his line of sight and go quiet and he loses you — but your torch
-          makes you visible from nearly twice as far, sprinting can be heard
-          across half the ship, and tearing a pakje open is the loudest thing
-          you can do.
+          Mr. Geil hunts by sight and sound, and he remembers where he last saw
+          you. Break his line of sight and go quiet and he loses you — but your
+          torch makes you visible from nearly twice as far, sprinting can be
+          heard across half the ship, and tearing a pakje open is the loudest
+          thing you can do. The pakjes, his berth, the round he walks and the
+          dead lanterns are dealt fresh every run.
         </p>
 
         <div class="panel">
@@ -87,27 +88,110 @@
               <button type="button" data-scheme="mouse">Mouse look</button>
               <button type="button" data-scheme="tank">Keyboard turn</button>
             </div>
-            <p class="field-note" data-note="mouse">Click to capture the pointer. <b>A/D</b> strafe.</p>
-            <p class="field-note" data-note="tank">No mouse needed. <b>A/D</b> turn the camera.</p>
+            <p class="field-note" data-note="mouse">
+              Click the dark once and the game takes the pointer: the mouse aims
+              your head, and the torch beam swings along a beat behind it.
+              <b>Esc</b> hands the pointer back and pauses; resuming takes it again.
+            </p>
+            <p class="field-note" data-note="tank">
+              No mouse at all. <b>A/D</b> swing the whole camera like a ship's
+              wheel and the view stays level, so the run is playable one-handed.
+            </p>
+
+            <div class="keymap">
+              <div class="key-row" data-note="mouse">
+                <span class="keys"><kbd>Mouse</kbd></span>
+                <span>Look around</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>W</kbd><kbd>S</kbd></span>
+                <span>Forward / back</span>
+              </div>
+              <div class="key-row" data-note="mouse">
+                <span class="keys"><kbd>A</kbd><kbd>D</kbd></span>
+                <span>Strafe left / right</span>
+              </div>
+              <div class="key-row" data-note="tank">
+                <span class="keys"><kbd>A</kbd><kbd>D</kbd></span>
+                <span>Turn left / right</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd></span>
+                <span>Walk and turn &mdash; live in both schemes</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>Shift</kbd></span>
+                <span>Run while held. Spends <b>Breath</b>; empty it and you have to catch it back before you can run again</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>C</kbd></span>
+                <span>Sneak while held &mdash; crouched, slow, barely audible</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>F</kbd></span>
+                <span>Torch on / off. You go down into the hold with it <b>dark</b> &mdash; nothing lights it but this key, and the beam goes where you look</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>E</kbd><kbd>Space</kbd><kbd>Click</kbd></span>
+                <span><b>Hold</b> to tear a pakje or lay out the altar &mdash; let go early and the bar empties. <b>Tap</b> at a crate to hide, tap again to climb out</span>
+              </div>
+              <div class="key-row">
+                <span class="keys"><kbd>Esc</kbd></span>
+                <span>Pause</span>
+              </div>
+            </div>
           </div>
 
           <div class="field">
             <label class="field-label" for="set-brightness">Brightness</label>
-            <input id="set-brightness" type="range" min="0" max="100" value="40">
+            <input id="set-brightness" data-setting="brightness" type="range" min="0" max="100" value="40">
           </div>
 
           <div class="field" id="sens-row">
             <label class="field-label" for="set-sensitivity">Mouse sensitivity</label>
-            <input id="set-sensitivity" type="range" min="30" max="250" value="100">
+            <input id="set-sensitivity" data-setting="sensitivity" type="range" min="30" max="250" value="100">
           </div>
 
           <div class="field">
             <label class="field-label" for="set-volume">Volume</label>
-            <input id="set-volume" type="range" min="0" max="100" value="75">
+            <input id="set-volume" data-setting="volume" type="range" min="0" max="100" value="75">
+          </div>
+
+          <div class="field">
+            <label class="field-label" for="set-seed">Ship</label>
+            <input id="set-seed" class="text-input" type="text" maxlength="16"
+                   placeholder="a new ship every run" spellcheck="false" autocomplete="off">
+            <p class="field-hint">
+              Leave it empty and the boat is dealt again each run. Type a code —
+              or any word — to sail the same one twice.
+            </p>
           </div>
         </div>
 
-        <button id="btn-start" class="btn btn-primary" type="button">Go below deck</button>
+        <button id="btn-start" class="btn btn-primary" type="button">Speak to Sinterklaas</button>
+      </div>
+    </section>
+
+
+    <!-- --------------------------------------------------- Intro -->
+    <section id="intro-screen" class="screen screen-intro">
+      <div class="screen-inner intro-inner">
+        <p class="kicker">Boven dek — hij durft niet mee naar beneden</p>
+
+        <div class="intro-body">
+          <img src="assets/sint.jpg" alt="Sinterklaas, on the deck of his steamboat" class="sint-portrait">
+          <div class="intro-speech">
+            <p class="intro-who">Sinterklaas</p>
+            <p id="intro-line" class="intro-line"></p>
+          </div>
+        </div>
+
+        <div id="intro-pips" class="intro-pips" aria-hidden="true"></div>
+
+        <div class="btn-row">
+          <button id="btn-intro-next" class="btn btn-primary" type="button">Verder</button>
+          <button id="btn-intro-skip" class="btn" type="button">Skip</button>
+        </div>
       </div>
     </section>
 
@@ -124,16 +208,15 @@
             </div>
           </div>
           <div class="field">
-            <span class="field-label">Brightness</span>
-            <input type="range" min="0" max="100" value="40"
-                   oninput="document.getElementById('set-brightness').value=this.value;document.getElementById('set-brightness').dispatchEvent(new Event('input'))">
+            <label class="field-label" for="pause-brightness">Brightness</label>
+            <input id="pause-brightness" data-setting="brightness" type="range" min="0" max="100" value="40">
           </div>
           <div class="field">
-            <span class="field-label">Volume</span>
-            <input type="range" min="0" max="100" value="75"
-                   oninput="document.getElementById('set-volume').value=this.value;document.getElementById('set-volume').dispatchEvent(new Event('input'))">
+            <label class="field-label" for="pause-volume">Volume</label>
+            <input id="pause-volume" data-setting="volume" type="range" min="0" max="100" value="75">
           </div>
         </div>
+        <p class="seed-line">Ship <b data-run-seed></b></p>
         <div class="btn-row">
           <button id="btn-resume" class="btn btn-primary" type="button">Resume</button>
           <button id="btn-quit" class="btn" type="button">Give up</button>
@@ -146,21 +229,33 @@
       <div class="screen-inner narrow">
         <h2 class="death-title">MR. GEIL ATE YOU</h2>
         <p id="death-reason" class="death-reason">He found you.</p>
-        <p class="death-flavour">He is, at last, <b>extra geil</b>.</p>
-        <button id="btn-retry" class="btn btn-primary" type="button">Again</button>
+        <p class="death-flavour">The altar stays cold. The stoomboot sails on without you, and Sinterklaas waits on deck for someone who never comes back up. He is, at last, <b>extra geil</b>.</p>
+        <p class="seed-line">Ship <b data-run-seed></b></p>
+        <div class="btn-row">
+          <button id="btn-retry" class="btn btn-primary" type="button">Same ship</button>
+          <button id="btn-retry-new" class="btn" type="button">New ship</button>
+        </div>
       </div>
     </section>
 
     <!-- ------------------------------------------------- Victory -->
     <section id="victory-screen" class="screen screen-victory">
       <div class="screen-inner narrow">
-        <h2 class="victory-title">YOU GOT OFF THE BOAT</h2>
+        <h2 class="victory-title">HET OFFER IS GEBRACHT</h2>
         <p>
-          Five anime body pillows lie on the altar in het ruim. Mr. Geil is snuggling
-          all of them at once and has entirely lost interest in eating you.
+          Five pakjes torn open in the dark, five soft pillows laid out in a row
+          on the warm altar in het ruim. Mr. Geil has what he wanted. No creaking,
+          no hunting, no shadow looking for you — the hold has gone quiet.
         </p>
-        <p class="victory-flavour">The gangway is open. Go, into the cold Dutch night.</p>
-        <button id="btn-play-again" class="btn btn-primary" type="button">Again</button>
+        <p class="victory-flavour">
+          Zie ginds komt de stoomboot: you sail into the light, and the boat
+          comes safely ashore. You survived het ruim.
+        </p>
+        <p class="seed-line">Ship <b data-run-seed></b></p>
+        <div class="btn-row">
+          <button id="btn-play-again" class="btn btn-primary" type="button">New ship</button>
+          <button id="btn-again-seed" class="btn" type="button">Same ship</button>
+        </div>
       </div>
     </section>
   </div>

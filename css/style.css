@@ -463,6 +463,89 @@ h2 {
 body[data-scheme="mouse"] .field-note[data-note="mouse"],
 body[data-scheme="tank"] .field-note[data-note="tank"] { display: block; }
 
+/* The full key list under the scheme picker — the player has to know where the
+   torch switch is before they are in the dark. Rows tagged with data-note
+   belong to one scheme only; the untagged ones are true in both. */
+.keymap {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 8px 14px;
+  align-items: baseline;
+}
+.key-row { display: contents; }
+.key-row[data-note] { display: none; }
+body[data-scheme="mouse"] .key-row[data-note="mouse"],
+body[data-scheme="tank"] .key-row[data-note="tank"] { display: contents; }
+
+.keymap .keys { display: flex; gap: 4px; }
+.keymap > .key-row > span:last-child {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  opacity: 0.75;
+}
+.keymap b { color: var(--bone); font-weight: 500; }
+
+.keymap kbd {
+  display: inline-block;
+  min-width: 21px;
+  padding: 3px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
+  color: var(--bone);
+  background: rgba(217, 211, 196, 0.06);
+  border: 1px solid var(--faint);
+}
+
+/* Same voice as .field-note, but always on. */
+.field-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--dim);
+  opacity: 0.75;
+}
+
+.text-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--bone);
+  background: transparent;
+  border: 1px solid var(--faint);
+  outline: none;
+  transition: border-color 0.18s ease, color 0.18s ease;
+}
+.text-input::placeholder {
+  color: var(--dim);
+  opacity: 0.6;
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+.text-input:focus { border-color: var(--amber); color: var(--amber); }
+
+/* The seed of the run you are in, on the pause and ending screens. Scoped to
+   .screen so the victory screen's own paragraph styling does not eat it. */
+.screen .seed-line {
+  margin: -8px 0 20px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.screen .seed-line b {
+  color: var(--bone);
+  font-weight: 500;
+  letter-spacing: 0.24em;
+}
+
 /* Hide the mouse sensitivity row when it cannot do anything. */
 body[data-scheme="tank"] #sens-row { display: none; }
 
@@ -532,6 +615,78 @@ input[type="range"]::-moz-range-thumb {
 .btn-primary:hover { background: var(--amber); color: var(--ink); }
 
 .btn-row { display: flex; gap: 12px; justify-content: center; }
+
+/* Intro — Sinterklaas, on deck, asking for help */
+.screen-intro {
+  background: radial-gradient(ellipse at center, rgba(26, 17, 10, 0.86), rgba(4, 4, 6, 0.98));
+}
+.intro-inner { max-width: 620px; }
+
+.intro-body { margin: 20px 0 18px; }
+
+/* The same hand-drawn sketch on white paper as Mr. Geil, so it gets the same
+   treatment: key the paper out and let the ink sit loose in the dark. Warmer,
+   because he is the one who is on your side. */
+.sint-portrait {
+  display: block;
+  width: 330px;
+  max-width: 78%;
+  margin: 0 auto 22px;
+  filter: invert(1) brightness(1.1) contrast(1.45) sepia(0.5) saturate(1.6) hue-rotate(-12deg);
+  mix-blend-mode: screen;
+  opacity: 0.88;
+}
+
+.intro-speech {
+  max-width: 500px;
+  margin: 0 auto;
+  text-align: left;
+}
+
+.intro-who {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 12px;
+}
+
+.intro-line {
+  font-size: 15px;
+  line-height: 1.75;
+  color: var(--bone);
+  /* Room for the longest line, so the panel does not jump as one is typed. */
+  min-height: 5.3em;
+}
+/* A drawn caret rather than a block glyph, which not every font carries. */
+.intro-line.is-typing::after {
+  content: '';
+  display: inline-block;
+  width: 0.46em;
+  height: 1.05em;
+  margin-left: 0.1em;
+  background: var(--amber);
+  vertical-align: -0.2em;
+  animation: caret 0.9s step-end infinite;
+}
+@keyframes caret { 50% { opacity: 0; } }
+
+.intro-pips {
+  display: flex;
+  gap: 5px;
+  justify-content: center;
+  margin: 22px 0 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-line.is-typing::after { animation: none; }
+}
+
+@media (max-width: 640px) {
+  .sint-portrait { width: 220px; margin-bottom: 16px; }
+  .intro-line { min-height: 7.5em; }
+}
 
 /* Death */
 .screen-death {

@@ -27,8 +27,11 @@ export class TributeAltar {
   build() {
     this.group.position.set(this.pos.x, 0, this.pos.z);
 
+    // Sized off the map's footing so the stone drawn here is the stone bodies
+    // collide with.
+    const foot = this.map.altarFootprint;
     const stoneMat = new THREE.MeshStandardMaterial({ color: 0x14100c, roughness: 0.94, metalness: 0.1 });
-    const baseGeo = new THREE.BoxGeometry(3.8, 0.42, 2.4);
+    const baseGeo = new THREE.BoxGeometry(foot.halfX * 2, 0.42, foot.halfZ * 2);
     const base = new THREE.Mesh(baseGeo, stoneMat);
     base.position.y = 0.21;
     base.receiveShadow = true;
@@ -37,7 +40,7 @@ export class TributeAltar {
 
     const clothTex = TextureFactory.createAltarCloth();
     const clothMat = new THREE.MeshStandardMaterial({ map: clothTex, roughness: 0.85, metalness: 0.05 });
-    const tableGeo = new THREE.BoxGeometry(3.3, 0.62, 2.0);
+    const tableGeo = new THREE.BoxGeometry(foot.halfX * 2 - 0.5, 0.62, foot.halfZ * 2 - 0.4);
     this.table = new THREE.Mesh(tableGeo, clothMat);
     this.table.position.y = 0.73;
     this.table.castShadow = true;
@@ -196,9 +199,12 @@ export class TributeAltar {
     this.halo.scale.set(11, 11, 1);
 
     enemy.pacify();
-    // He comes to collect, and is delighted.
+    // He comes to collect, and is delighted. The altar straddles the boundary
+    // between the two shrine rows, so half a cell back is the middle of the row
+    // behind it — a standable cell. Any further and he is inside the bulkhead
+    // that closes het ruim off, which is where he used to end up.
     enemy.x = this.pos.x;
-    enemy.z = this.pos.z - 4.2;
+    enemy.z = this.pos.z - this.map.cellSize / 2;
 
     horrorAudio.playTributeSuccess();
   }
