@@ -748,6 +748,9 @@ class Game {
     // the rate behind them never leave this loop.
     el.style.setProperty('--glow', lamp.glow.toFixed(3));
     el.style.setProperty('--near', lamp.proximity.toFixed(3));
+    // Flame flicker speed scales directly with Mr. Geil's distance/proximity (0.9s down to 0.09s).
+    const flickerDur = (0.9 - lamp.proximity * 0.81).toFixed(3) + 's';
+    el.style.setProperty('--flicker-dur', flickerDur);
   }
 
   updateZone(pos, delta) {
