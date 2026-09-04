@@ -740,6 +740,41 @@ body[data-role="hunter"] #stamina .hud-label::after { content: " — lunge"; }
 }
 .crew-list .pick:hover { color: var(--bone); border-color: var(--bone); }
 
+.relay-box {
+  margin: 0 0 18px;
+  text-align: left;
+  border-bottom: 1px solid var(--faint);
+  padding-bottom: 16px;
+}
+.relay-box summary {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+  cursor: pointer;
+  padding: 4px 0;
+}
+.relay-box summary:hover { color: var(--bone); }
+.relay-box[open] summary { color: var(--amber); margin-bottom: 10px; }
+.relay-box .field-hint { margin-bottom: 10px; }
+.relay-box .text-input { text-transform: none; letter-spacing: 0.04em; }
+
+/* The one-line technical account of a connection that did not happen. Small,
+   monospaced and selectable, because its whole job is to be pasted at
+   somebody who can read it. */
+.lobby-detail {
+  margin: -14px 0 18px;
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.6;
+  color: var(--dim);
+  opacity: 0.7;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.lobby-detail:empty { display: none; }
+
 .lobby-status {
   min-height: 1.5em;
   margin-bottom: 20px;

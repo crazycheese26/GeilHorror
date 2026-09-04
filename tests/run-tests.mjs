@@ -25,6 +25,7 @@ const { NetSession, MODE, BLEED_SECONDS } = await import('../src/net/session.js'
 const {
   makeRoomCode, normaliseCode, isValidCode, topicFor, makePeerId
 } = await import('../src/net/signal.js');
+const { parseRelay, setRelay, getIceServers } = await import('../src/net/peer.js');
 
 const { existsSync, statSync } = await import('node:fs');
 const { fileURLToPath } = await import('node:url');
@@ -901,6 +902,45 @@ section('room codes');
 
   const ids = Array.from({ length: 200 }, () => makePeerId());
   check('peer ids do not collide', new Set(ids).size === 200);
+}
+
+section('relay');
+{
+  // Nothing but STUN by default. A dead TURN server is worse than none: ICE
+  // waits for it, gathering never completes, and every connection pays the
+  // full timeout before it can start.
+  setRelay('');
+  const bare = getIceServers();
+  check('a boat sails with STUN and nothing else',
+    bare.length === 2 && bare.every(s => String(s.urls).startsWith('stun:')));
+  check('and nothing in the list needs an account',
+    bare.every(s => !s.username && !s.credential));
+
+  const piped = parseRelay('turn:relay.example.com:3478|piet|sint');
+  check('a relay reads in the shape people are given it',
+    piped && piped.urls === 'turn:relay.example.com:3478' &&
+    piped.username === 'piet' && piped.credential === 'sint');
+
+  const tcp = parseRelay(' turns:relay.example.com:5349?transport=tcp | piet | sint ');
+  check('spaces and query strings survive',
+    tcp && tcp.urls === 'turns:relay.example.com:5349?transport=tcp' && tcp.username === 'piet');
+
+  const inline = parseRelay('turn:piet:sint@relay.example.com:3478');
+  check('so does the url-with-credentials shape',
+    inline && inline.urls === 'turn:relay.example.com:3478' &&
+    inline.username === 'piet' && inline.credential === 'sint');
+
+  check('a password with a pipe in it stays whole',
+    parseRelay('turn:h:1|u|a|b').credential === 'a|b');
+  check('rubbish is not a relay',
+    parseRelay('') === null && parseRelay('hello') === null && parseRelay(null) === null);
+
+  setRelay('turn:relay.example.com:3478|piet|sint');
+  const withRelay = getIceServers();
+  check('setting one puts it behind the STUN servers',
+    withRelay.length === 3 && withRelay[2].urls === 'turn:relay.example.com:3478');
+  setRelay('');
+  check('and clearing it takes it back out again', getIceServers().length === 2);
 }
 
 // The transport, replaced. Two of these hand each other deep copies, so a bug

@@ -15,10 +15,19 @@ import { Peer } from './peer.js';
 export const MAX_PLAYERS = 4;
 
 // A joiner announces itself, the host answers. If nothing comes back the code
-// is wrong, the host has closed, or one of the two is behind a firewall the
-// public relay cannot get through either.
+// is wrong or the host has closed.
 const JOIN_RETRY = 3200;
 const JOIN_TIMEOUT = 22000;
+
+// Descriptions were swapped and then nothing happened. That is not a lobby
+// problem — it is two networks that will not let browsers reach each other —
+// and it has to be said out loud rather than left spinning, because the fix
+// (a relay) is something only a person can go and get.
+const CONNECT_TIMEOUT = 20000;
+
+// Late candidates are trickled after the fact, but the lobby topic is rate
+// limited, so only a couple of follow-ups are worth sending.
+const MAX_TRICKLE = 3;
 
 // Cheap liveness: a laptop lid closing does not always close a data channel.
 const PING_INTERVAL = 2500;
@@ -112,6 +121,13 @@ export class Room {
       if (peer) peer.acceptAnswer(data.sdp).catch(() => peer.fail());
       return;
     }
+    if (kind === 'ice') {
+      const peer = this.peers.get(from);
+      if (peer && data) {
+        for (const candidate of data.candidates || []) peer.addRemoteCandidate(candidate);
+      }
+      return;
+    }
     if (kind === 'shut' && !this.isHost && from === this.hostId) {
       this.report('hostleft');
       return;
@@ -166,13 +182,45 @@ export class Room {
 
   adopt(id, initiator) {
     const peer = new Peer(id, { initiator });
+
+    // Anything ICE turns up after the description has gone out, batched into
+    // at most a few follow-up messages rather than one per candidate.
+    let pending = [];
+    let trickles = 0;
+    let flush = null;
+    peer.onLateCandidate = (candidate) => {
+      if (this.closed || peer.ready || trickles >= MAX_TRICKLE) return;
+      pending.push(candidate);
+      if (flush) return;
+      flush = setTimeout(() => {
+        flush = null;
+        if (this.closed || peer.ready || !pending.length) return;
+        trickles++;
+        this.signal.send('ice', { candidates: pending }, id);
+        pending = [];
+      }, 500);
+    };
+
+    // Descriptions swapped, channels never opened.
+    const watchdog = setTimeout(() => {
+      if (this.closed || peer.closed || peer.ready) return;
+      this.report('nodirect', peer.summary());
+      peer.fail();
+    }, CONNECT_TIMEOUT);
+
     peer.onopen = () => {
+      clearTimeout(watchdog);
+      if (flush) clearTimeout(flush);
       // Names travel over the connection, not the lobby, so a name never
       // sits in a public topic.
       peer.send('hi', { name: this.name });
       if (this.onjoin) this.onjoin(id, this.names.get(id) || 'Piet');
     };
-    peer.onclose = () => this.drop(id);
+    peer.onclose = () => {
+      clearTimeout(watchdog);
+      if (flush) clearTimeout(flush);
+      this.drop(id);
+    };
     peer.onmessage = (kind, packet) => this.route(id, kind, packet);
     this.peers.set(id, peer);
     return peer;

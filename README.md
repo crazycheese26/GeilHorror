@@ -160,16 +160,54 @@ toward the last thing the host said about him rather than dropped onto it.
 Events that must not be lost — a pakje opened, somebody going down, the run
 ending — go on a reliable one.
 
-### What it cannot do
+### When two browsers cannot reach each other
+
+Most of the time they can. Two home connections find each other directly with
+nothing but STUN — a free public service that does not carry any traffic, it
+only tells a browser what its own address looks like from outside. That is the
+whole ICE configuration this game ships with, and a connection takes well under
+a second.
+
+Some pairs cannot. A mobile network, a work or school firewall, a VPN, or two
+players sat behind the same carrier-grade NAT: the descriptions get swapped
+fine and then no packet ever gets through. When that happens the traffic has to
+go through a **relay** (a TURN server), and the lobby says so plainly rather
+than sitting on "opening a line" — along with one line of detail about what ICE
+actually managed, which is the thing worth pasting into a bug report.
+
+Open **Trouble connecting?** in the lobby and paste one in. **Only one of you
+needs it**; a relay allocated by either side works for both. Free tiers exist
+and none of them is a server you run:
+
+| | |
+| --- | --- |
+| **Metered** | [metered.ca/tools/openrelay](https://www.metered.ca/tools/openrelay/) — free account, 50 GB a month, gives you a host, username and password straight away |
+| **Cloudflare** | Cloudflare Calls TURN — free tier, needs a Cloudflare account |
+| **Your own** | `coturn` on any box you already have |
+
+The box takes the shape they hand you:
+
+```
+turn:relay.example.com:3478|username|password
+turn:username:password@relay.example.com:3478
+turns:relay.example.com:5349?transport=tcp|username|password
+```
+
+It is kept in `localStorage` with the rest of the settings, so it is typed once.
+
+A word on why there is no relay in the box already: there used to be a
+well-known free public one, and every project on the internet hardcoded it. It
+is gone. A **dead** TURN server is worse than none at all — ICE waits on it,
+gathering never finishes, and every connection pays a two-and-a-half second
+timeout before it can even start looking. So the default list is STUN only, and
+a relay is something you add when the lobby tells you that you need one.
+
+### What else it cannot do
 
 - **The room is the host's tab.** Close it and the boat goes down with it.
   There is nowhere for a room to live when nobody is holding it open.
 - **No reconnecting.** A dropped player is gone for that run; the room takes
   joiners again from the ending screen.
-- **Two players behind strict NATs may not connect.** A free public TURN relay
-  is configured as a fallback in `src/net/peer.js`, and if it has gone away the
-  game still connects for most people. Paste your own credentials there if you
-  want a guaranteed one.
 - **A room code is the only thing keeping a room private**, the same as every
   party-code game. It is five characters out of thirty-three million.
 

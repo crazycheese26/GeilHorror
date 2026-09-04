@@ -285,7 +285,23 @@
           </div>
         </div>
 
+        <details class="relay-box">
+          <summary>Trouble connecting?</summary>
+          <p class="field-hint">
+            Two browsers normally reach each other directly and nothing below is
+            needed. If one of you is on a mobile network, behind a work firewall
+            or on a VPN, they may not be able to — and then the traffic has to go
+            through a <b>relay</b>. Free ones exist; the README says where to get
+            one in about two minutes. Only <b>one</b> of you needs to paste it in.
+          </p>
+          <input id="set-relay" class="text-input" type="text" spellcheck="false"
+                 autocomplete="off" placeholder="turn:host:3478|username|password"
+                 aria-label="Relay server">
+          <p class="field-hint" id="relay-state"></p>
+        </details>
+
         <p id="lobby-status" class="lobby-status"></p>
+        <p id="lobby-detail" class="lobby-detail"></p>
 
         <div class="btn-row">
           <button id="btn-launch" class="btn btn-primary is-hidden" type="button">Go below</button>

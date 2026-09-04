@@ -15,6 +15,7 @@ import { Room, MAX_PLAYERS } from './net/room.js';
 import { NetSession, MODE, BLEED_SECONDS } from './net/session.js';
 import { CrewView } from './crew.js';
 import { makeRoomCode, normaliseCode, isValidCode } from './net/signal.js';
+import { setRelay } from './net/peer.js';
 
 const SETTINGS_KEY = 'geil.settings.v1';
 
@@ -58,7 +59,10 @@ const DEFAULT_SETTINGS = {
   // Empty means a new ship every run. Anything typed here pins the layout.
   seed: '',
   // What the rest of the crew sees over your head.
-  playerName: ''
+  playerName: '',
+  // Optional TURN relay, for the pairs that cannot reach each other directly.
+  // Empty is the normal case; see the lobby's "Trouble connecting?" box.
+  relay: ''
 };
 
 class Game {
@@ -147,6 +151,10 @@ class Game {
     if (this.dom.name && this.dom.name.value !== this.settings.playerName) {
       this.dom.name.value = this.settings.playerName;
     }
+    if (this.dom.relay && this.dom.relay.value !== this.settings.relay) {
+      this.dom.relay.value = this.settings.relay;
+    }
+    this.applyRelay();
 
     this.saveSettings();
   }
@@ -203,6 +211,9 @@ class Game {
       modeNote: $('mode-note'),
       crewList: $('crew-list'),
       lobbyStatus: $('lobby-status'),
+      lobbyDetail: $('lobby-detail'),
+      relay: $('set-relay'),
+      relayState: $('relay-state'),
       launch: $('btn-launch'),
       roomCodes: document.querySelectorAll('[data-room-code]'),
       crewPanel: $('crew-panel'),
@@ -385,6 +396,13 @@ class Game {
       this.dom.name.addEventListener('input', (e) => {
         this.settings.playerName = e.target.value.slice(0, 14);
         this.saveSettings();
+      });
+    }
+    if (this.dom.relay) {
+      this.dom.relay.addEventListener('input', (e) => {
+        this.settings.relay = e.target.value.trim().slice(0, 300);
+        this.saveSettings();
+        this.applyRelay();
       });
     }
     if (this.dom.joinCode) {
@@ -846,6 +864,19 @@ class Game {
       case 'hostleft':
         this.setNetStatus('The boat closed.', 'bad');
         break;
+      case 'nodirect':
+        // Both sides swapped everything they know and still could not reach
+        // each other. That is a network, not a bug, and the way out of it is
+        // a relay — so say so instead of spinning.
+        this.setNetStatus(
+          'Found them, but could not open a direct line. One of you is behind ' +
+          'something that will not let two browsers talk to each other — a ' +
+          'mobile network, a work firewall, a VPN. Open "Trouble connecting?" ' +
+          'below: only one of you needs a relay.',
+          'bad'
+        );
+        this.setNetDetail(detail);
+        break;
       case 'error':
         if (detail) this.setNetStatus(detail, 'warn');
         break;
@@ -906,6 +937,29 @@ class Game {
     el.textContent = text || '';
     el.classList.toggle('is-warn', tone === 'warn');
     el.classList.toggle('is-bad', tone === 'bad');
+    if (!text) this.setNetDetail('');
+  }
+
+  // The one-line account of what ICE actually managed, kept next to the
+  // message rather than in a console nobody has open.
+  setNetDetail(text) {
+    if (this.dom.lobbyDetail) this.dom.lobbyDetail.textContent = text || '';
+  }
+
+  // A relay only ever affects connections made after it is set, which is fine:
+  // it is read when a Peer is constructed, and that is per joiner.
+  applyRelay() {
+    const server = setRelay(this.settings.relay);
+    if (!this.dom.relayState) return;
+    if (!this.settings.relay) this.dom.relayState.textContent = '';
+    else if (server) {
+      this.dom.relayState.textContent = server.username
+        ? `Relay set: ${server.urls}`
+        : `Relay set: ${server.urls} — no username or password, which most relays need.`;
+    } else {
+      this.dom.relayState.textContent =
+        'That does not look like a relay. Expected turn:host:port|username|password.';
+    }
   }
 
   renderLobby() {
