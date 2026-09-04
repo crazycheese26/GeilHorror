@@ -27,8 +27,14 @@ export class ItemManager {
     this.progress = 0;
     this.activeTarget = null;
 
-    // Fired by the game loop: (pillowData, worldX, worldZ).
+    // Fired by the game loop: (pillowData, worldX, worldZ, noiseRadius, openerId).
     this.onUnwrapped = null;
+
+    // With other people on the boat the host rules on who got which pakje, so
+    // finishing the hold announces it instead of opening it. The paper only
+    // tears when the answer comes back. See net/session.js.
+    this.announceOnly = false;
+    this.onWantUnwrap = null;
 
     this.wrapTexture = TextureFactory.createPresentWrap();
     this.haloTexture = TextureFactory.createBlobShadow();
@@ -145,6 +151,10 @@ export class ItemManager {
     return this.collectedCount >= this.requiredCount;
   }
 
+  byId(id) {
+    return this.presents.find(p => p.id === id) || null;
+  }
+
   remaining() {
     return Math.max(0, this.requiredCount - this.collectedCount);
   }
@@ -157,7 +167,11 @@ export class ItemManager {
     if (target && target === this.activeTarget && interactHeld) {
       this.progress += delta / UNWRAP_SECONDS;
       if (this.progress >= 1) {
-        this.unwrap(target);
+        if (this.announceOnly) {
+          if (this.onWantUnwrap) this.onWantUnwrap(target);
+        } else {
+          this.unwrap(target);
+        }
         this.progress = 0;
         this.activeTarget = null;
       } else {
@@ -187,7 +201,16 @@ export class ItemManager {
     return { target: this.activeTarget, progress: this.progress };
   }
 
-  unwrap(present) {
+  // The one door every pakje goes through, whoever opened it and on whichever
+  // browser. Opening one twice is a no-op, which is what makes it safe to
+  // apply the host's word on the machine that asked for it.
+  unwrapById(id, openerId = null) {
+    const present = this.byId(id);
+    if (present) this.unwrap(present, openerId);
+    return present;
+  }
+
+  unwrap(present, openerId = null) {
     if (present.isUnwrapped) return;
     present.isUnwrapped = true;
 
@@ -204,7 +227,10 @@ export class ItemManager {
     horrorAudio.playUnwrap();
 
     if (this.onUnwrapped) {
-      this.onUnwrapped(present.pillowData, present.worldPos.x, present.worldPos.z, UNWRAP_NOISE_RADIUS);
+      this.onUnwrapped(
+        present.pillowData, present.worldPos.x, present.worldPos.z,
+        UNWRAP_NOISE_RADIUS, openerId
+      );
     }
   }
 

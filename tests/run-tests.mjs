@@ -21,6 +21,10 @@ const {
 } = await import('../src/layout.js');
 const { horrorAudio, TRACKS } = await import('../src/audio.js');
 const { Lantern, LANTERN_RANGE, LANTERN_ALARM } = await import('../src/lantern.js');
+const { NetSession, MODE, BLEED_SECONDS } = await import('../src/net/session.js');
+const {
+  makeRoomCode, normaliseCode, isValidCode, topicFor, makePeerId
+} = await import('../src/net/signal.js');
 
 const { existsSync, statSync } = await import('node:fs');
 const { fileURLToPath } = await import('node:url');
@@ -864,6 +868,624 @@ section('soak');
     problems.slice(0, 3).join(' | '));
   check('and covers ground while he does it', Math.min(...distances) > 150,
     `shortest patrol ${Math.min(...distances).toFixed(0)} m`);
+}
+
+
+// --- Two browsers on one boat -------------------------------------------
+//
+// The networking is tested the way the rest of the simulation is: headlessly,
+// with the real modules, and with nothing stubbed that decides anything. There
+// is no WebRTC here — the transport is a pair of objects that hand each other
+// JSON — but everything above it is the code that ships: two NetSessions, two
+// SteamboatMaps, two GeilEnemys, two ItemManagers, and the same update loop
+// main.js runs, stepped by hand.
+//
+// What that buys is the two things multiplayer can break quietly: two browsers
+// dealing different ships from the same seed, and the host's word about the
+// world failing to land on anybody else's.
+
+section('room codes');
+{
+  const codes = Array.from({ length: 200 }, () => makeRoomCode());
+  check('a code is five characters', codes.every(c => c.length === 5));
+  check('and always one somebody can read out', codes.every(isValidCode));
+  check('with no O, I, 0 or 1 in it', codes.every(c => !/[OI01]/.test(c)));
+  check('and they are not all the same', new Set(codes).size > 150);
+
+  check('typing it in lower case is fine', normaliseCode('a b-c d e') === 'ABCDE');
+  check('and rubbish is not a code', !isValidCode('') && !isValidCode('ABC') && !isValidCode('ABCDI'));
+
+  check('a code always hashes to the same topic', topicFor('ABCDE') === topicFor('abcde'));
+  check('and two codes do not share one', topicFor('ABCDE') !== topicFor('ABCDF'));
+  check('the topic is not the code', !topicFor('ABCDE').includes('ABCDE'));
+
+  const ids = Array.from({ length: 200 }, () => makePeerId());
+  check('peer ids do not collide', new Set(ids).size === 200);
+}
+
+// The transport, replaced. Two of these hand each other deep copies, so a bug
+// where one browser holds a reference into another one's state shows up here
+// as a test failure rather than as a run that only works on one machine.
+class LoopRoom {
+  constructor(isHost) {
+    this.selfId = makePeerId();
+    this.isHost = isHost;
+    this.hostId = null;
+    this.closed = false;
+    this.locked = false;
+    this.link = null;
+    this.sent = 0;
+    this.onjoin = null;
+    this.onleave = null;
+    this.onmessage = null;
+    this.onstatus = null;
+  }
+
+  static pair() {
+    const host = new LoopRoom(true);
+    const guest = new LoopRoom(false);
+    host.link = guest;
+    guest.link = host;
+    host.hostId = host.selfId;
+    guest.hostId = host.selfId;
+    return { host, guest };
+  }
+
+  connect(hostName, guestName) {
+    if (this.onjoin) this.onjoin(this.link.selfId, this.isHost ? guestName : hostName);
+  }
+
+  send(kind, data, { to = null, reliable = true } = {}) {
+    if (this.closed || !this.link || this.link.closed) return;
+    if (to && to !== this.link.selfId) return;
+    this.sent++;
+    this.link.deliver(this.selfId, kind, JSON.parse(JSON.stringify(data ?? null)));
+  }
+
+  deliver(from, kind, data) {
+    if (this.onmessage) this.onmessage(from, kind, data);
+  }
+
+  part() {
+    const wasHost = !this.isHost && this.link && this.link.selfId === this.hostId;
+    if (this.onleave && this.link) this.onleave(this.link.selfId, wasHost);
+  }
+
+  lock() { this.locked = true; }
+  unlock() { this.locked = false; }
+  close() { this.closed = true; }
+}
+
+// One browser: its own map, its own copy of everything, and the same wiring
+// main.js does in beginNetRun.
+function makeBrowser(room, name) {
+  const map = new SteamboatMap(new THREE.Scene());
+  const world = {
+    map,
+    player: new Player(new THREE.PerspectiveCamera(), map, document.createElement('canvas'), settings),
+    enemy: new GeilEnemy(scene, map),
+    items: null,
+    altar: new TributeAltar(scene, map),
+    layout: null
+  };
+  const log = { started: 0, events: [], ended: null, frames: 0, reuk: 0 };
+
+  const game = {
+    world: () => world,
+    berthFor(session, player) {
+      if (!world.layout) return null;
+      return session.isHunter(player.id)
+        ? world.layout.enemySpawn
+        : world.layout.crewSpawns[(player.berth || 0) % world.layout.crewSpawns.length];
+    },
+    onCrewChanged() {},
+    onCrewFrame() { log.frames++; },
+    onCrewEvent(kind, player) { log.events.push(`${kind}:${player.name}`); },
+    onReuk() { log.reuk++; },
+    endNetRun(outcome, detail) { log.ended = { outcome, detail }; },
+
+    // The same order as main.js: deal the ship from the seed, then place the
+    // body, then decide what this copy of Mr. Geil is allowed to do.
+    beginNetRun(session) {
+      const rng = new Rng(session.seed);
+      const layout = generateRunLayout(map, rng);
+      map.applyRunLayout(layout);
+      world.layout = layout;
+
+      if (world.items) world.items.dispose();
+      world.items = new ItemManager(scene, map, rng);
+      world.items.announceOnly = true;
+      world.items.onWantUnwrap = (present) => session.requestTear(present.id);
+      world.items.onUnwrapped = (pillow, x, z, radius) => {
+        if (session.isHost) world.enemy.hearNoiseAt(x, z, radius / 30);
+        world.enemy.setTier(world.items.collectedCount);
+      };
+      world.altar.reset();
+
+      const me = session.local();
+      const hunter = session.isHunter(me.id);
+      world.enemy.applyRunLayout(layout);
+      world.enemy.reset();
+      world.enemy.viewer = world.player;
+      world.enemy.setControl({
+        simulate: session.isHost && session.mode === MODE.COOP,
+        authoritative: session.isHost
+      });
+      world.enemy.setEmbodied(hunter);
+
+      world.player.setProfile(hunter ? 'geil' : 'survivor');
+      world.player.reset(hunter
+        ? layout.enemySpawn
+        : layout.crewSpawns[(me.berth || 0) % layout.crewSpawns.length]);
+      world.player.setEnabled(true);
+      log.started++;
+    }
+  };
+
+  const session = new NetSession({ room, game, name });
+  return { room, session, world, log, name };
+}
+
+// main.js's update loop, with the DOM taken out of it.
+function stepBrowser(browser, delta) {
+  const { session, world } = browser;
+  if (session.phase !== 'run') return;
+
+  const me = session.local();
+  const downed = !!(me && (me.down || me.dead));
+  world.player.setFrozen(downed);
+  world.player.update(delta);
+
+  const pos = world.player.getPosition();
+  const held = world.player.interactHeld && !downed;
+
+  const altarState = world.altar.update(delta, pos, held, world.items, {
+    remoteOffering: session.remoteOffering(),
+    driven: !session.isHost
+  });
+  const canOpen = !world.player.isHidden && !altarState.canOffer && !downed &&
+    !session.isHunter();
+  world.items.update(delta, pos, held, canOpen);
+
+  if (session.isHost && !world.altar.isOffered && world.altar.progress >= 1 &&
+      world.items.isReadyForTribute()) {
+    world.altar.complete(world.enemy);
+    session.onOffered();
+  }
+
+  session.update(delta);
+
+  world.enemy.viewer = world.player;
+  const targets = session.isHost ? session.huntTargets(world) : [world.player];
+  world.enemy.update(delta, targets,
+    session.isHost ? (target) => session.onCatch(target, world) : null);
+}
+
+function runTicks(browsers, seconds, before = null) {
+  const ticks = Math.round(seconds * 60);
+  for (let i = 0; i < ticks; i++) {
+    if (before) before(i);
+    for (const browser of browsers) stepBrowser(browser, 1 / 60);
+  }
+}
+
+// Open a room, get both sides into a run, and hand back both browsers.
+function boardTogether(mode = MODE.COOP, seed = 0xC0FFEE, hunterFirst = false) {
+  const rooms = LoopRoom.pair();
+  const host = makeBrowser(rooms.host, 'Sint');
+  const guest = makeBrowser(rooms.guest, 'Piet');
+
+  rooms.host.connect('Sint', 'Piet');
+  rooms.guest.connect('Sint', 'Piet');
+
+  host.session.setMode(mode);
+  if (mode === MODE.HUNT && !hunterFirst) host.session.setHunter(rooms.guest.selfId);
+  host.session.startRun(seed);
+  return { host, guest, rooms };
+}
+
+section('crew: the lobby');
+{
+  const rooms = LoopRoom.pair();
+  const host = makeBrowser(rooms.host, 'Sint');
+  const guest = makeBrowser(rooms.guest, 'Piet');
+  rooms.host.connect('Sint', 'Piet');
+  rooms.guest.connect('Sint', 'Piet');
+
+  check('the host sees both of them', host.session.playerCount() === 2);
+  check('and so does the joiner, off the host’s roster', guest.session.playerCount() === 2);
+  check('names travel', [...guest.session.players.values()].map(p => p.name).sort().join() === 'Piet,Sint');
+  check('and colours agree on both machines', (() => {
+    const a = [...host.session.players.entries()].sort().map(([, p]) => p.colour);
+    const b = [...guest.session.players.entries()].sort().map(([, p]) => p.colour);
+    return a.length === 2 && a.join() === b.join();
+  })(), 'slots are ordered by id, not by who arrived first');
+
+  host.session.setMode(MODE.HUNT);
+  check('the mode the host picks is the mode everybody is in', guest.session.mode === MODE.HUNT);
+  check('and somebody is wearing the mask', !!guest.session.hunterId);
+
+  host.session.setHunter(rooms.guest.selfId);
+  check('the host can hand the mask over',
+    guest.session.isHunter(guest.session.localId) &&
+    host.session.isHunter(rooms.guest.selfId) &&
+    !host.session.isHunter(host.session.localId));
+
+  host.session.setMode(MODE.COOP);
+  check('and co-op takes it off everyone',
+    guest.session.hunterId === null && !guest.session.isHunter());
+}
+
+section('crew: one seed, one ship');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0xBEEF11);
+
+  check('both browsers dealt a ship', host.log.started === 1 && guest.log.started === 1);
+
+  const a = host.world.layout;
+  const b = guest.world.layout;
+  check('the pakjes are in the same places',
+    JSON.stringify(a.presents) === JSON.stringify(b.presents));
+  check('he starts in the same berth',
+    JSON.stringify(a.enemySpawn) === JSON.stringify(b.enemySpawn));
+  check('the circuit he paces is the same',
+    JSON.stringify(a.patrolRoute) === JSON.stringify(b.patrolRoute));
+  check('the same lanterns are dead',
+    JSON.stringify(a.lanternsAlive) === JSON.stringify(b.lanternsAlive));
+  check('and the crew berths match',
+    JSON.stringify(a.crewSpawns) === JSON.stringify(b.crewSpawns));
+
+  check('the same pillow is in the same pakje',
+    host.world.items.presents.map(p => p.pillowData.name).join('|') ===
+    guest.world.items.presents.map(p => p.pillowData.name).join('|'),
+    'this is why no part of the layout is ever sent');
+
+  check('nobody woke up on top of anybody else',
+    Math.hypot(host.world.player.x - guest.world.player.x,
+               host.world.player.z - guest.world.player.z) > 1.5);
+  check('and both berths are standable', [host, guest].every(b2 =>
+    !b2.world.map.checkCollision(b2.world.player.x, b2.world.player.z, 0.5)));
+}
+
+section('crew: bodies on the wire');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0x515151);
+  const guestId = guest.session.localId;
+
+  // Before a single packet has been sent, everybody is already in the right
+  // place, because the berths came out of the seed rather than off the wire.
+  check('the roster starts where the run does, not at the origin', (() => {
+    const mirrored = host.session.players.get(guestId);
+    return Math.hypot(mirrored.x - guest.world.player.x,
+                      mirrored.z - guest.world.player.z) < 0.01 &&
+      (mirrored.x !== 0 || mirrored.z !== 0);
+  })(), 'the origin is a real cell on this ship; a phantom there would be hunted');
+
+  const from = { x: guest.world.player.x, z: guest.world.player.z };
+  guest.world.player.keys.forward = true;
+  runTicks([host, guest], 1.5);
+  const gaitOnTheWire = host.session.players.get(guestId).gait;
+  guest.world.player.keys.forward = false;
+  runTicks([host, guest], 0.4);
+
+  const walked = Math.hypot(guest.world.player.x - from.x, guest.world.player.z - from.z);
+  const mirrored = host.session.players.get(guestId);
+  check('a crewmate who walks is a crewmate who walks over there', walked > 1.5,
+    `${walked.toFixed(2)} m`);
+  check('and the host has them where they actually are',
+    Math.hypot(mirrored.x - guest.world.player.x, mirrored.z - guest.world.player.z) < 0.6,
+    `${Math.hypot(mirrored.x - guest.world.player.x, mirrored.z - guest.world.player.z).toFixed(2)} m adrift`);
+  check('the joiner is told about the host in return',
+    guest.session.players.get(host.session.localId).x === host.world.player.x ||
+    guest.log.frames > 0);
+  check('and their gait travels with them',
+    gaitOnTheWire === 'walk' && mirrored.gait === 'still',
+    `walking read as ${gaitOnTheWire}, stopped read as ${mirrored.gait}`);
+
+  // Fifteen a second each way, not sixty.
+  check('positions are not sent every frame',
+    host.room.sent < 90 * 1.4 && host.room.sent > 12,
+    `${host.room.sent} messages in 1.5 s`);
+}
+
+section('crew: his body, mirrored');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0xA11CE5);
+
+  check('only the host thinks for him',
+    host.world.enemy.simulate === true && guest.world.enemy.simulate === false);
+  check('and only the host decides who he caught',
+    host.world.enemy.authoritative === true && guest.world.enemy.authoritative === false);
+  check('both start him in the same berth',
+    Math.hypot(host.world.enemy.x - guest.world.enemy.x,
+               host.world.enemy.z - guest.world.enemy.z) < 0.01);
+
+  runTicks([host, guest], 6);
+
+  const drift = Math.hypot(host.world.enemy.x - guest.world.enemy.x,
+                           host.world.enemy.z - guest.world.enemy.z);
+  check('he paces on the host', (() => {
+    const spawn = host.world.layout.enemySpawn;
+    return Math.hypot(host.world.enemy.x - spawn.x, host.world.enemy.z - spawn.z) > 3;
+  })());
+  check('and the mirror keeps up with him', drift < 1.2, `${drift.toFixed(2)} m behind`);
+  check('without ever pathfinding for itself',
+    guest.world.enemy.poi === null && guest.world.enemy.cachedStep === null,
+    'a mirror holds no plan; it is walked toward what it was told');
+
+  // Fifteen positions a second on a body that runs at five metres of them:
+  // dropped onto each one he would advance in visible jerks.
+  const before = { x: guest.world.enemy.x, z: guest.world.enemy.z };
+  guest.world.enemy.applyRemote({ x: before.x + 0.4, z: before.z });
+  stepBrowser(guest, 1 / 60);
+  const stepped = Math.hypot(guest.world.enemy.x - before.x, guest.world.enemy.z - before.z);
+  check('a fresh position is walked toward, not jumped to',
+    stepped > 0.01 && stepped < 0.3, `${stepped.toFixed(3)} m in one frame`);
+
+  // But a placement is a placement.
+  const far = cell(19, 1);
+  guest.world.enemy.applyRemote({ x: far.x, z: far.z });
+  check('a placement is not', Math.hypot(guest.world.enemy.x - far.x,
+                                         guest.world.enemy.z - far.z) < 0.01,
+    'the start of a run, or the altar moving him');
+}
+
+section('crew: the host rules on the pakjes');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0x9911AA);
+
+  // Stand the joiner on a pakje and let them tear it open. The paper only
+  // tears when the host says so, so a pass through the wire is compulsory.
+  const target = guest.world.items.presents[0];
+  guest.world.player.setPosition(target.worldPos.x, target.worldPos.z);
+  guest.world.player.interactHeld = true;
+  runTicks([host, guest], 2.4);
+  guest.world.player.interactHeld = false;
+  runTicks([host, guest], 0.2);
+
+  check('the pakje opened', guest.world.items.collectedCount === 1);
+  check('on the host as well', host.world.items.collectedCount === 1,
+    'the tear is a request; the host is what makes it true');
+  check('and it was the same pakje', host.world.items.presents[0].isUnwrapped);
+  check('with the same pillow in it',
+    host.world.items.inventory[0].name === guest.world.items.inventory[0].name);
+  check('the bang reached him', host.world.enemy.awareness > 0 ||
+    host.world.enemy.lastKnown !== null);
+  check('but the joiner did not tell him about it herself',
+    guest.world.enemy.lastKnown === null,
+    'a mirror holds no belief of its own — it is shown the host\'s');
+}
+
+section('crew: down, and back up');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0x4D4D4D);
+  const guestId = guest.session.localId;
+
+  // Put both of them in the same open stretch, then walk him onto the joiner.
+  const spot = cell(13, 5);
+  host.world.player.setPosition(spot.x, spot.z);
+  guest.world.player.setPosition(spot.x + 2.0, spot.z);
+  // Let a few frames go out first: pinning him to the roster before it has
+  // heard from anybody would only prove the seating works.
+  runTicks([host, guest], 0.3);
+
+  runTicks([host, guest], 1.2, () => {
+    const prey = host.session.players.get(guestId);
+    host.world.enemy.x = prey.x;
+    host.world.enemy.z = prey.z;
+  });
+
+  const downedHost = host.session.players.get(guestId);
+  const downedGuest = guest.session.local();
+  check('he takes somebody down rather than out', downedHost.down && !downedHost.dead);
+  check('and they know it on their own machine', downedGuest.down && !downedGuest.dead);
+  check('the run is not over', host.session.phase === 'run' && !host.log.ended);
+  check('both screens were told', host.log.events.includes(`down:Piet`) &&
+    guest.log.events.includes('down:Piet'));
+  check('he loses interest for a moment', host.world.enemy.satedTimer > 0,
+    'or a rescue would never be worth attempting');
+  check('and stops hunting the body', (() => {
+    const targets = host.session.huntTargets(host.world);
+    return targets.some(t => t.netId === guestId && t.netHunted === false);
+  })());
+
+  // The body does not walk.
+  const fell = { x: guest.world.player.x, z: guest.world.player.z };
+  guest.world.player.keys.forward = true;
+  runTicks([host, guest], 0.8);
+  guest.world.player.keys.forward = false;
+  check('a downed body stays where it fell',
+    Math.hypot(guest.world.player.x - fell.x, guest.world.player.z - fell.z) < 0.05);
+  check('and the clock is running on it',
+    downedHost.bleed < BLEED_SECONDS && downedHost.bleed > BLEED_SECONDS - 8);
+
+  // He has had what he came for and gone. Kneel over them and haul.
+  const away = cell(1, 19);
+  host.world.enemy.x = away.x;
+  host.world.enemy.z = away.z;
+  host.world.player.setPosition(fell.x + 1.4, fell.z);
+  host.world.player.interactHeld = true;
+  runTicks([host, guest], 1.0);
+  check('hauling takes a while', guest.session.local().down === true);
+  runTicks([host, guest], 3.6);
+  host.world.player.interactHeld = false;
+
+  check('and then they are up', !host.session.players.get(guestId).down &&
+    !guest.session.local().down);
+  check('on both machines', guest.session.local().alive === true);
+  check('and both screens said so', host.log.events.includes('up:Piet') &&
+    guest.log.events.includes('up:Piet'));
+}
+
+section('crew: nobody left to come and get you');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0x7A7A11);
+  const hostId = host.session.localId;
+  const guestId = guest.session.localId;
+
+  const spot = cell(13, 9);
+  host.world.player.setPosition(spot.x, spot.z);
+  guest.world.player.setPosition(spot.x + 2.4, spot.z);
+  runTicks([host, guest], 0.3);
+
+  // Take the first one down, then keep going. With one body already on the
+  // deck the last one upright has nobody coming, so he takes them outright.
+  runTicks([host, guest], 3.0, () => {
+    const first = host.session.players.get(guestId);
+    const target = first.down ? host.session.players.get(hostId) : first;
+    host.world.enemy.x = target.x;
+    host.world.enemy.z = target.z;
+    // sate() is the whole reason going back for somebody works; hold it off so
+    // this test can reach the wipe inside a reasonable number of ticks.
+    host.world.enemy.satedTimer = 0;
+  });
+
+  check('the last one upright is not downed, he is taken',
+    host.session.players.get(hostId).dead,
+    'there is nobody left who could have come for them');
+  check('and the body left on the deck bleeds out fast', (() => {
+    const left = host.session.players.get(guestId);
+    return left.dead || left.bleed < BLEED_SECONDS - 12;
+  })(), 'nobody upright means nobody coming');
+
+  runTicks([host, guest], 10);
+  check('so the run ends rather than running the clock down',
+    host.log.ended && host.log.ended.outcome === 'taken');
+  check('for everybody', guest.log.ended && guest.log.ended.outcome === 'taken');
+}
+
+section('crew: the offering');
+{
+  const { host, guest } = boardTogether(MODE.COOP, 0x0FFE12);
+
+  // Five pakjes between them, however they were shared out.
+  for (let i = 0; i < 5; i++) {
+    host.session.openPresent(host.world.items.presents[i].id, host.session.localId);
+  }
+  check('the count is shared', host.world.items.collectedCount === 5 &&
+    guest.world.items.collectedCount === 5);
+  check('and so is what is in the pile',
+    host.world.items.inventory.map(p => p.name).join() ===
+    guest.world.items.inventory.map(p => p.name).join());
+
+  // The joiner walks it to the altar on their own; the host is elsewhere.
+  const altar = host.world.map.altarLocation;
+  guest.world.player.setPosition(altar.x, altar.z - 2.4);
+  guest.world.player.interactHeld = true;
+  runTicks([host, guest], 1.0);
+  check('the host is laying it out even though nobody there is theirs',
+    host.world.altar.progress > 0.2, `${host.world.altar.progress.toFixed(2)}`);
+  check('and the joiner is shown the host’s progress, not their own',
+    Math.abs(guest.world.altar.progress - host.world.altar.progress) < 0.2);
+
+  runTicks([host, guest], 2.4);
+  guest.world.player.interactHeld = false;
+
+  check('the offering is made', host.world.altar.isOffered);
+  check('and it is the ending, on both machines',
+    host.log.ended && host.log.ended.outcome === 'offered' &&
+    guest.log.ended && guest.log.ended.outcome === 'offered');
+  check('he is pacified where the crew can see it',
+    host.world.enemy.state === STATE.PACIFIED);
+}
+
+section('crew: the hunt');
+{
+  const { host, guest } = boardTogether(MODE.HUNT, 0x11EE22);
+
+  check('one of them is him', guest.session.isHunter() && !host.session.isHunter());
+  check('and is in his body', guest.world.player.profileName === 'geil');
+  check('which is a different body', guest.world.player.profile.speed.walk >
+    host.world.player.profile.speed.walk);
+  check('he does not carry a torch', (() => {
+    guest.world.player.toggleFlashlight();
+    return guest.world.player.flashlightOn === false;
+  })());
+  check('and cannot climb into a crate', (() => {
+    const crate = guest.world.map.hidingSpots[0];
+    guest.world.player.setPosition(crate.x, crate.z);
+    return guest.world.player.canHideAt(crate) === false;
+  })());
+  check('the survivor still gets one', host.world.player.profileName === 'survivor' &&
+    host.world.player.profile.torch === true);
+  check('the AI is off on both machines',
+    host.world.enemy.simulate === false && guest.world.enemy.simulate === false);
+  check('and only the host rules on catches',
+    host.world.enemy.authoritative === true && guest.world.enemy.authoritative === false);
+  check('the person playing him is not also haunted by him',
+    guest.world.enemy.embodied === true && guest.world.enemy.sprite.visible === false);
+
+  // Walk him across the ship and check his body follows on the host.
+  const open = cell(13, 3);
+  guest.world.player.setPosition(open.x, open.z);
+  guest.world.player.yaw = Math.PI;
+  runTicks([host, guest], 0.4);
+  check('the host puts him where the player playing him is',
+    Math.hypot(host.world.enemy.x - guest.world.player.x,
+               host.world.enemy.z - guest.world.player.z) < 0.5,
+    `${Math.hypot(host.world.enemy.x - guest.world.player.x, host.world.enemy.z - guest.world.player.z).toFixed(2)} m`);
+  check('and faces him the way they are looking', (() => {
+    const want = Math.atan2(-Math.sin(guest.world.player.yaw), -Math.cos(guest.world.player.yaw));
+    return Math.abs(Math.atan2(Math.sin(host.world.enemy.facing - want),
+                               Math.cos(host.world.enemy.facing - want))) < 0.02;
+  })());
+
+  // The nose. Somebody standing still is nobody; somebody sprinting is not.
+  const survivor = host.session.players.get(host.session.localId);
+  survivor.gait = 'still';
+  guest.session.reuk.timer = 0;
+  guest.session.updateReuk(1 / 60, guest.world);
+  check('a crew standing still leaves no smell', guest.session.reuk.strength === 0);
+
+  host.world.player.setPosition(open.x + 10, open.z);
+  runTicks([host, guest], 0.3);
+  host.session.players.get(host.session.localId).gait = 'sprint';
+  guest.session.players.get(host.session.localId).gait = 'sprint';
+  guest.session.reuk.timer = 0;
+  guest.session.updateReuk(1 / 60, guest.world);
+  check('somebody sprinting does', guest.session.reuk.strength > 0);
+  check('and it points roughly at them', (() => {
+    const me = guest.session.local();
+    const prey = guest.session.players.get(host.session.localId);
+    const want = Math.atan2(prey.x - me.x, prey.z - me.z);
+    const got = Math.atan2(guest.session.reuk.dx, guest.session.reuk.dz);
+    return Math.abs(Math.atan2(Math.sin(got - want), Math.cos(got - want))) < 0.9;
+  })(), 'a strong reading is nearly exact; a faint one is a direction, not a fix');
+  check('it names who it found', guest.session.reuk.name === 'Sint');
+  check('and the survivor gets no ring pointing back at him',
+    host.world.enemy.awareness === 0,
+    'a person playing him builds no AI awareness, so nothing gives him away');
+}
+
+section('crew: the boat goes down');
+{
+  const { host, guest, rooms } = boardTogether(MODE.COOP, 0x33AA55);
+  runTicks([host, guest], 0.3);
+
+  rooms.host.close();
+  rooms.guest.part();
+
+  check('the joiner is told the boat closed',
+    guest.log.ended && guest.log.ended.outcome === 'hostgone');
+  check('and stops simulating', guest.session.phase === 'over');
+}
+
+section('crew: a crewmate walks off');
+{
+  const { host, guest, rooms } = boardTogether(MODE.COOP, 0x66BB77);
+  const guestId = guest.session.localId;
+  runTicks([host, guest], 0.3);
+
+  rooms.guest.close();
+  rooms.host.part();
+
+  check('the host keeps the run going', host.session.phase === 'run' && !host.log.ended);
+  check('but stops hunting somebody who is not there',
+    host.session.huntTargets(host.world).every(t => t.netId !== guestId));
+
+  // And with nobody else aboard, the run is over rather than unwinnable.
+  check('a boat with nobody left on it ends', host.log.ended === null ||
+    host.log.ended.outcome === 'taken');
 }
 
 // --- Report -------------------------------------------------------------

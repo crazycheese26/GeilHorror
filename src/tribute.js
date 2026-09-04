@@ -113,7 +113,13 @@ export class TributeAltar {
     return Math.hypot(playerPos.x - this.pos.x, playerPos.z - this.pos.z) < REACH;
   }
 
-  update(delta, playerPos, interactHeld, itemManager) {
+  // `crew` carries what a run with other people in it needs:
+  //   remoteOffering  somebody else is holding it down, wherever they are
+  //   driven          this browser does not rule on the offering, so the
+  //                   progress bar is set from outside (see syncProgress) and
+  //                   nothing here may touch it
+  // Left out, this is the game played alone and behaves exactly as it did.
+  update(delta, playerPos, interactHeld, itemManager, crew = {}) {
     const time = performance.now() / 1000;
     for (const c of this.candles) {
       const flick = 0.8 + Math.sin(time * 11 + c.phase) * 0.2;
@@ -123,9 +129,15 @@ export class TributeAltar {
     this.light.intensity = 1.5 + Math.sin(time * 6.5) * 0.18;
 
     const inRange = this.isInRange(playerPos);
-    const canOffer = inRange && !this.isOffered && itemManager.isReadyForTribute();
+    const ready = itemManager.isReadyForTribute();
+    const canOffer = inRange && !this.isOffered && ready;
 
-    if (canOffer && interactHeld) {
+    if (crew.driven) return { inRange, progress: this.progress, canOffer };
+
+    const laying = (canOffer && interactHeld) ||
+      (crew.remoteOffering && ready && !this.isOffered);
+
+    if (laying) {
       const before = this.progress;
       this.progress = Math.min(1, this.progress + delta / OFFER_SECONDS);
       this.placePillowsUpTo(this.progress, itemManager);
@@ -140,6 +152,24 @@ export class TributeAltar {
     }
 
     return { inRange, progress: this.progress, canOffer };
+  }
+
+  // The host is the only one that gets to advance the offering, so everybody
+  // else is told where it is up to and lays the pillows out to match. Nothing
+  // else about the shrine — the candles, the light — needs saying: it is the
+  // same altar on every browser.
+  syncProgress(progress, itemManager) {
+    if (this.isOffered || !Number.isFinite(progress)) return;
+    const before = this.progress;
+    this.progress = Math.max(0, Math.min(1, progress));
+    this.placePillowsUpTo(this.progress, itemManager);
+    const total = itemManager.inventory.length;
+    if (total > 0) {
+      const step = 1 / total;
+      if (Math.floor(before / step) < Math.floor(this.progress / step)) {
+        horrorAudio.playPillowChime();
+      }
+    }
   }
 
   // Lay out however many pillows the hold has earned so far.

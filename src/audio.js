@@ -40,6 +40,7 @@ class HorrorAudio {
     this.lastTear = 0;
     this.lastGeilStep = 0;
     this.lastDetected = 0;
+    this.lastCrewStep = 0;
 
     // Soundtrack. Built in init(); until then every music call is a no-op, so
     // the headless harness and a browser with no Audio element both survive.
@@ -501,6 +502,48 @@ class HorrorAudio {
 
     this.tone('sine', 74 + Math.random() * 18, 28, vol, 0.006, 0.19);
     this.burst(0.14, 'lowpass', 380, 0.9, vol * 0.7, 0.006, 0.12);
+  }
+
+  // Somebody else's boots on the deck. Lighter and drier than his, and cut
+  // off at the range that gait actually carries, so what you hear of a
+  // crewmate is exactly what he would hear of them — which is the whole of
+  // how a person playing him finds anybody.
+  playCrewStep(dist, carry, gait = 'walk') {
+    if (!this.ready || this.muted) return;
+    const now = this.t;
+    if (now - this.lastCrewStep < 0.1) return;
+    this.lastCrewStep = now;
+
+    const falloff = Math.max(0, 1 - dist / Math.max(1, carry));
+    const loudness = gait === 'sprint' ? 0.13 : gait === 'sneak' ? 0.03 : 0.075;
+    const vol = falloff * falloff * loudness;
+    if (vol < 0.003) return;
+
+    this.tone('triangle', 126 + Math.random() * 30, 40, vol, 0.005, 0.1);
+    this.burst(0.08, 'bandpass', 1500 + Math.random() * 800, 1.3, vol * 0.45, 0.004, 0.06);
+  }
+
+  // A crewmate goes down under him.
+  playCrewDown() {
+    if (!this.ready || this.muted) return;
+    this.tone('sawtooth', 260, 70, 0.13, 0.01, 0.62);
+    this.burst(0.4, 'lowpass', 700, 0.8, 0.1, 0.006, 0.4);
+  }
+
+  // And is hauled back up off the deck.
+  playCrewUp() {
+    if (!this.ready || this.muted) return;
+    this.tone('sine', 392, 587, 0.09, 0.02, 0.42);
+    this.tone('sine', 587, 784, 0.06, 0.06, 0.5);
+  }
+
+  // The hunter's pulse: a wet, low sniff of the ship's air. Loudness is how
+  // strong the reading was, so a faint one barely registers.
+  playReuk(strength = 1) {
+    if (!this.ready || this.muted) return;
+    const peak = 0.05 + strength * 0.14;
+    this.burst(0.55, 'lowpass', 300 + strength * 340, 1.4, peak, 0.09, 0.4);
+    this.tone('sine', 58, 44, peak * 0.7, 0.05, 0.5);
   }
 
   // He has seen you.

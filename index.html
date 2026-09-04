@@ -41,6 +41,21 @@
         <span class="lantern-label">Lantaarntje</span>
       </div>
 
+      <!-- Who else is down here, and how they are getting on. Empty and
+           hidden in single player. -->
+      <div id="crew-panel"></div>
+
+      <!-- The person playing Mr. Geil gets no torch and no lantaarntje. This
+           is instead: a pulse of whoever is making the most noise. -->
+      <div id="hunt-panel">
+        <div class="hud-label">De reuk</div>
+        <div id="reuk-track"><div id="reuk-fill"></div></div>
+        <div id="reuk-name"></div>
+        <div id="prey-left"></div>
+      </div>
+
+      <div id="room-chip"><span>Room</span><b data-room-code>-----</b></div>
+
       <div id="zone-name"></div>
       <div id="toast"></div>
 
@@ -61,6 +76,13 @@
       <div id="stamina">
         <div class="hud-label">Breath</div>
         <div id="stamina-track"><div id="stamina-fill"></div></div>
+      </div>
+
+      <!-- On the deck with him standing over you, waiting for a crewmate. -->
+      <div id="downed">
+        <div class="downed-title">HIJ HEEFT JE</div>
+        <div class="downed-sub">Hold on. Somebody has to come and get you.</div>
+        <div id="bleed-track"><div id="bleed-fill"></div></div>
       </div>
 
       <div id="keyhints">
@@ -93,6 +115,13 @@
           ticks faster the nearer he gets — how near, never which way. The
           pakjes, his berth, the round he walks and the dead lanterns are dealt
           fresh every run.
+        </p>
+        <p class="brief">
+          Or take two to four of you down there. <b>Co-op</b> and he hunts all of
+          you at once — caught is not dead, it is on the deck waiting for
+          somebody to come and get you. <b>De jacht</b> and one of you is him:
+          no torch, no lantaarntje, just a nose for whoever is making noise.
+          Browser to browser, no server, no account, no install.
         </p>
 
         <div class="panel">
@@ -174,7 +203,8 @@
           <div class="field">
             <label class="field-label" for="set-seed">Ship</label>
             <input id="set-seed" class="text-input" type="text" maxlength="16"
-                   placeholder="a new ship every run" spellcheck="false" autocomplete="off">
+                   data-seed-input placeholder="a new ship every run"
+                   spellcheck="false" autocomplete="off">
             <p class="field-hint">
               Leave it empty and the boat is dealt again each run. Type a code —
               or any word — to sail the same one twice.
@@ -182,7 +212,85 @@
           </div>
         </div>
 
-        <button id="btn-start" class="btn btn-primary" type="button">Speak to Sinterklaas</button>
+        <div class="btn-row">
+          <button id="btn-start" class="btn btn-primary" type="button">Speak to Sinterklaas</button>
+          <button id="btn-crew" class="btn" type="button">Sail with a crew</button>
+        </div>
+      </div>
+    </section>
+
+
+    <!-- --------------------------------------------------- Lobby -->
+    <section id="lobby-screen" class="screen screen-lobby">
+      <div class="screen-inner">
+        <p class="kicker">Meer dan één paar laarzen op het dek</p>
+        <h2>Met z&#39;n allen</h2>
+
+        <p class="brief">
+          Two to four of you, straight from browser to browser — there is no
+          server behind this and there is nothing to install. One of you opens
+          a boat and reads out the five-character code; everybody else types it
+          in. Whoever opened it deals the ship and starts the run.
+        </p>
+
+        <div class="panel">
+          <div class="field">
+            <label class="field-label" for="set-name">Your name</label>
+            <input id="set-name" class="text-input" type="text" maxlength="14"
+                   placeholder="Piet" spellcheck="false" autocomplete="off">
+          </div>
+
+          <div class="field" id="lobby-open">
+            <span class="field-label">Boat</span>
+            <div class="join-row">
+              <input id="join-code" class="text-input code-input" type="text" maxlength="5"
+                     placeholder="CODE" spellcheck="false" autocomplete="off"
+                     aria-label="Room code">
+              <button id="btn-join" class="btn" type="button">Join</button>
+            </div>
+            <button id="btn-host" class="btn btn-primary btn-wide" type="button">Open a new boat</button>
+          </div>
+
+          <div class="field is-hidden" id="lobby-room">
+            <span class="field-label">Room code</span>
+            <div class="code-display">
+              <b data-room-code>-----</b>
+              <button id="btn-copy" class="btn btn-mini" type="button">Copy link</button>
+            </div>
+            <p class="field-hint" id="room-hint">
+              Read this out, or send the link. It only works while this tab is open.
+            </p>
+          </div>
+
+          <div class="field is-hidden" id="lobby-mode">
+            <span class="field-label">Mode</span>
+            <div class="segmented">
+              <button type="button" data-mode="coop">Co-op</button>
+              <button type="button" data-mode="hunt">De jacht</button>
+            </div>
+            <p class="field-hint" id="mode-note"></p>
+          </div>
+
+          <div class="field is-hidden" id="lobby-crew">
+            <span class="field-label">Crew</span>
+            <ul id="crew-list" class="crew-list"></ul>
+          </div>
+
+          <div class="field is-hidden" id="lobby-seed">
+            <label class="field-label" for="lobby-seed-input">Ship</label>
+            <input id="lobby-seed-input" class="text-input" type="text" maxlength="16"
+                   data-seed-input placeholder="a new ship every run"
+                   spellcheck="false" autocomplete="off">
+            <p class="field-hint">Everybody sails the boat the host deals.</p>
+          </div>
+        </div>
+
+        <p id="lobby-status" class="lobby-status"></p>
+
+        <div class="btn-row">
+          <button id="btn-launch" class="btn btn-primary is-hidden" type="button">Go below</button>
+          <button id="btn-lobby-back" class="btn" type="button">Back</button>
+        </div>
       </div>
     </section>
 
@@ -248,6 +356,21 @@
         <div class="btn-row">
           <button id="btn-retry" class="btn btn-primary" type="button">Same ship</button>
           <button id="btn-retry-new" class="btn" type="button">New ship</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------------------------------------------- Crew ending -->
+    <section id="crew-end-screen" class="screen screen-crew-end">
+      <div class="screen-inner narrow">
+        <h2 id="crew-end-title">HET OFFER IS GEBRACHT</h2>
+        <p id="crew-end-text"></p>
+        <p id="crew-end-detail" class="death-flavour"></p>
+        <ul id="crew-end-list" class="crew-list"></ul>
+        <p class="seed-line">Ship <b data-run-seed></b></p>
+        <div class="btn-row">
+          <button id="btn-crew-again" class="btn btn-primary" type="button">Back to the lobby</button>
+          <button id="btn-crew-leave" class="btn" type="button">Leave the boat</button>
         </div>
       </div>
     </section>

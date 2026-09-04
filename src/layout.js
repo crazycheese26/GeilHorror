@@ -11,6 +11,8 @@
 // rules are ever tightened past what the hull can support the authored layout
 // is used instead, so the game always boots.
 
+import { Rng } from './rng.js';
+
 export const LAYOUT_RULES = {
   presentCount: 10,        // pakjes on the ship; five pillows finish a run
   presentSeparation: 13,   // metres between two pakjes, so none share a nook
@@ -20,6 +22,13 @@ export const LAYOUT_RULES = {
   routeLength: 5,          // waypoints in his patrol circuit
   routeSeparation: 18,     // metres between waypoints: long legs, not loitering
   enemyMinStartDistance: 28,
+  // A crew wakes up together but not on top of one another: far enough apart
+  // to be four people in a corridor, near enough that the first thing anybody
+  // does is find the others.
+  crewSize: 4,
+  crewSeparation: 3.4,
+  crewRadius: 15,
+  crewPresentClearance: 5,
   // Mr. Geil's collision radius (see updateMovement in enemy.js). Anywhere he
   // is placed has to fit a body this wide or he starts the run wedged.
   bodyRadius: 0.5,
@@ -194,6 +203,40 @@ function buildPatrolRoute(map, rng, spawn) {
   return ordered;
 }
 
+// Where a crew wakes up. The first berth is always the authored start, so a
+// run played alone is the run that was always there and the rest of the ship's
+// rules — pakjes at least 11 m from where you wake, Mr. Geil at least 28 —
+// still measure from the same cell. The other three are dealt around it.
+function placeCrewSpawns(map, rng, presents) {
+  const start = map.playerStart;
+  const first = map.worldToCell(start.x, start.z);
+  const spawns = [{ r: first.r, c: first.c, x: start.x, z: start.z }];
+
+  const pool = map.walkableTiles.filter(tile => {
+    if (map.grid[tile.r][tile.c] === 2) return false;
+    if (map.zoneAtCell(tile.r, tile.c) === 'shrine') return false;
+    if (!isStandable(map, tile)) return false;
+    if (dist(tile, start) > LAYOUT_RULES.crewRadius) return false;
+    // Waking up on top of a pakje would hand the run to whoever spawned there.
+    return presents.every(p => dist(tile, p) >= LAYOUT_RULES.crewPresentClearance);
+  });
+
+  const shuffled = rng.shuffle(pool);
+  let spacing = LAYOUT_RULES.crewSeparation;
+  while (spawns.length < LAYOUT_RULES.crewSize && spacing > 0) {
+    for (const tile of shuffled) {
+      if (spawns.length >= LAYOUT_RULES.crewSize) break;
+      if (spawns.some(s => s.r === tile.r && s.c === tile.c)) continue;
+      if (!spawns.every(s => dist(s, tile) >= spacing)) continue;
+      spawns.push({ r: tile.r, c: tile.c, x: tile.x, z: tile.z });
+    }
+    // A tight hull is allowed to stand people closer rather than stack them
+    // all on the one authored cell.
+    spacing -= 1.2;
+  }
+  return spawns;
+}
+
 // Which lantern fixtures are dead this run. Roughly a fifth, as before — but a
 // different fifth, so the dark stretches move.
 function rollLanterns(map, rng) {
@@ -205,9 +248,11 @@ export function generateRunLayout(map, rng, attempts = 8) {
 
   for (let i = 0; i < attempts; i++) {
     const enemySpawn = placeEnemySpawn(map, rng);
+    const presents = placePresents(map, rng);
     const layout = {
-      presents: placePresents(map, rng),
+      presents,
       enemySpawn,
+      crewSpawns: placeCrewSpawns(map, rng, presents),
       patrolRoute: buildPatrolRoute(map, rng, enemySpawn),
       lanternsAlive: rollLanterns(map, rng),
       authored: false
@@ -236,6 +281,7 @@ export function authoredLayout(map) {
   return {
     presents,
     enemySpawn: { r: spawn.r, c: spawn.c, x: spawn.x, z: spawn.z },
+    crewSpawns: placeCrewSpawns(map, new Rng(0x5747), presents),
     patrolRoute: [],
     lanternsAlive: map.lanternSpots.map(spot => spot.alive),
     authored: true
@@ -324,6 +370,20 @@ export function validateRunLayout(map, layout) {
       if (map.checkCollision(w.x, w.z, LAYOUT_RULES.bodyRadius)) {
         problems.push(`patrol waypoint ${w.r},${w.c} is blocked by a prop`);
       }
+    }
+  }
+
+  // A crew berth is walked from the moment the run starts, so it answers to
+  // the same rule as a patrol waypoint. Coming up short is not a broken ship —
+  // a run played alone never reads past the first one — so only the berths
+  // that were dealt are checked.
+  for (const berth of layout.crewSpawns || []) {
+    if (!map.isWalkableCell(berth.r, berth.c)) {
+      problems.push(`crew berth ${berth.r},${berth.c} is inside a bulkhead`);
+    }
+    if (!reachable.has(key(berth))) problems.push(`crew berth ${berth.r},${berth.c} is walled off`);
+    if (map.checkCollision(berth.x, berth.z, LAYOUT_RULES.bodyRadius)) {
+      problems.push(`crew berth ${berth.r},${berth.c} is blocked by a prop`);
     }
   }
 

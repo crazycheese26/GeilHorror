@@ -369,6 +369,27 @@ export class TextureFactory {
     return texture;
   }
 
+  // A crewmate's name, floating over their head. Drawn rather than modelled:
+  // one small canvas per player, made once when they join.
+  static createNameplate(text, colour = '#d9d3c4') {
+    const label = String(text || '').slice(0, 14).toUpperCase();
+    const { canvas, ctx } = makeCtx(256, 64);
+
+    ctx.font = '600 30px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // A dark outline first, so a pale name still reads against a lit bulkhead.
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = 'rgba(4, 6, 9, 0.9)';
+    ctx.strokeText(label, 128, 34);
+    ctx.fillStyle = colour;
+    ctx.fillText(label, 128, 34);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.encoding = THREE.sRGBEncoding;
+    return texture;
+  }
+
   // Soft radial blob for the contact shadow under Mr. Geil.
   static createBlobShadow() {
     const { canvas, ctx } = makeCtx(128, 128);

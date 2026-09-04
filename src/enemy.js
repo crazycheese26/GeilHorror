@@ -9,6 +9,13 @@
 //
 // That loop is the whole game: break his line of sight, go quiet, and he
 // loses you. Sprint past him with your torch on and he will not.
+//
+// He hunts a crew, and single player is the crew of one. Every browser in a
+// run keeps its own copy of him and each does a different subset of the work:
+// the host thinks for him and decides who he catches, everybody else only
+// draws and sounds him from the host's word. When a person is playing him the
+// thinking is off everywhere and his position comes down the wire like a
+// player's does. See setControl and applyRemote.
 
 import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
@@ -51,10 +58,29 @@ export class GeilEnemy {
 
     this.state = STATE.PATROL;
     this.awareness = 0;
-    this.distToPlayer = Infinity;
+    this.distToPlayer = Infinity;   // to whoever he is working on
+    this.distToViewer = Infinity;   // to this browser's own camera
     this.hasLos = false;
     this.tier = 0;              // rises with every pillow collected
     this.isDeadly = true;
+
+    // Who does what with this copy of him. Both true is single player and the
+    // host of a co-op run; both false is a browser mirroring the host's.
+    this.simulate = true;       // run the AI
+    this.authoritative = true;  // decide who he catches
+    // The body the camera is behind, when that is not simply the only player.
+    this.viewer = null;
+    this.focus = null;          // the crew member he is working on
+    // He has just taken somebody and is not looking for anyone else yet.
+    this.satedTimer = 0;
+    // True on the browser of whoever is playing him: his sketch and his
+    // footfalls belong to everybody else, not to the person inside him.
+    this.embodied = false;
+    // A body driven from outside is only heard when it is actually walking.
+    this.remoteMoving = false;
+    // Where whoever is driving him last said he was. He is walked toward it
+    // rather than dropped on it — see followRemote.
+    this.target = { x: this.x, z: this.z, facing: 0 };
 
     this.poi = null;            // point of interest he is walking to
     this.lastKnown = null;
@@ -143,6 +169,7 @@ export class GeilEnemy {
 
   // Returns a 0..1 strength for how strongly he can see the player right now.
   seeStrength(player, dist) {
+    if (this.satedTimer > 0) return 0;
     const range = this.sightRange(player);
     if (range <= 0 || dist > range) return 0;
 
@@ -166,6 +193,7 @@ export class GeilEnemy {
   }
 
   hearStrength(player, dist) {
+    if (this.satedTimer > 0) return 0;
     let radius = player.getNoiseRadius();
     if (radius <= 0) return 0;
     if (!this.map.hasLineOfSight(this.x, this.z, player.x, player.z)) radius *= 0.55;
@@ -175,31 +203,175 @@ export class GeilEnemy {
 
   // --- Main loop -------------------------------------------------------
 
-  update(delta, player, onCatch) {
+  // `crew` is one player or a list of them; single player is the list of one,
+  // which is why none of the arithmetic below had to change to carry four.
+  //
+  // onCatch is handed the body he reached, so a crew can lose one member
+  // without losing the run.
+  update(delta, crew, onCatch) {
+    const targets = Array.isArray(crew) ? crew : [crew];
+    const viewer = this.viewer || targets[0] || null;
+    this.distToViewer = viewer
+      ? Math.hypot(viewer.x - this.x, viewer.z - this.z)
+      : Infinity;
+
     if (this.state === STATE.PACIFIED) {
-      this.updateVisual(delta, player, 0);
+      this.updateVisual(delta, viewer, 0);
       return;
     }
 
-    const dx = player.x - this.x;
-    const dz = player.z - this.z;
-    const dist = Math.hypot(dx, dz);
-    this.distToPlayer = dist;
+    if (this.satedTimer > 0) this.satedTimer -= delta;
     this.justDetected = false;
 
-    const see = this.seeStrength(player, dist);
-    const hear = this.hearStrength(player, dist);
-    this.hasLos = see > 0;
+    // Somebody already on the deck is not being hunted — he has had them —
+    // but whoever is crouched over them dragging them back up very much is.
+    const hunted = targets.filter(t => t && t.netHunted !== false);
+    const focus = this.readCrew(hunted);
+    this.focus = focus ? focus.target : null;
+    this.distToPlayer = focus ? focus.dist : Infinity;
+    this.hasLos = focus ? focus.see > 0 : false;
 
-    this.updateAwareness(delta, player, see, hear, dist);
-    this.updateState(delta, player, see, hear, dist);
-    this.updateMovement(delta, player);
-    this.updateAudio(delta, dist);
-    this.updateVisual(delta, player, dist);
-
-    if (this.checkCaught(player, dist)) {
-      if (onCatch) onCatch();
+    if (!this.simulate) {
+      this.followRemote(delta);
+    } else if (focus) {
+      this.updateAwareness(delta, focus.target, focus.see, focus.hear, focus.dist);
+      this.updateState(delta, focus.target, focus.see, focus.hear, focus.dist);
+      this.updateMovement(delta, focus.target);
+    } else {
+      // Nobody left upright. Let the hunch bleed away and go back to pacing,
+      // rather than standing over the last place anybody was.
+      this.updateAwareness(delta, null, 0, 0, Infinity);
+      if (this.state !== STATE.PATROL) this.enterState(STATE.PATROL, null);
+      else this.patrolStep(delta);
+      this.updateMovement(delta, null);
     }
+
+    // Sound and sight are always this browser's own, measured from its camera,
+    // whoever is doing the thinking.
+    this.updateAudio(delta, this.distToViewer);
+    this.updateVisual(delta, viewer, this.distToViewer);
+
+    if (!this.authoritative || !onCatch) return;
+    for (const target of hunted) {
+      const dist = Math.hypot(target.x - this.x, target.z - this.z);
+      if (this.checkCaught(target, dist)) onCatch(target);
+    }
+  }
+
+  // Whom he is working on. Sight outranks sound: a body he can actually see is
+  // a better lead than a footstep two compartments away, however loud, and a
+  // tie goes to whoever is nearer.
+  readCrew(crew) {
+    let best = null;
+    // A browser that is only drawing him does not need to work out what he can
+    // see: two line-of-sight traces per crewmate per frame, for a belief
+    // nobody on this machine is allowed to hold.
+    if (!this.simulate) return null;
+    for (const target of crew) {
+      const dist = Math.hypot(target.x - this.x, target.z - this.z);
+      const see = this.seeStrength(target, dist);
+      const hear = this.hearStrength(target, dist);
+      const score = see * 2 + hear;
+      if (!best || score > best.score || (score === best.score && dist < best.dist)) {
+        best = { target, dist, see, hear, score };
+      }
+    }
+    return best;
+  }
+
+  // --- Driven from outside ---------------------------------------------
+
+  // simulate: think for him. authoritative: decide who he catches. The host of
+  // a co-op run does both, a person playing him does neither (the host still
+  // rules on catches), and a browser mirroring the host does neither.
+  setControl({ simulate = true, authoritative = true } = {}) {
+    this.simulate = simulate;
+    this.authoritative = authoritative;
+    if (!simulate) {
+      this.cachedStep = null;
+      this.poi = null;
+      this.target = { x: this.x, z: this.z, facing: this.facing };
+    }
+  }
+
+  // Where he is, according to whoever is driving him. Pacifying is deliberately
+  // not settable from here: it changes his lights and his colour, so it goes
+  // through pacify() on every browser instead.
+  applyRemote({ x, z, facing, state, awareness, tier } = {}) {
+    if (Number.isFinite(x) && Number.isFinite(z)) {
+      // Standing still has to sound like standing still: updateAudio steps him
+      // on a timer, and a timer does not know he has stopped.
+      this.remoteMoving = Math.hypot(x - this.target.x, z - this.target.z) > 0.004;
+      this.target.x = x;
+      this.target.z = z;
+      // A jump this big is a placement — the start of a run, or the altar
+      // moving him — not a stride. Go straight there.
+      if (Math.hypot(x - this.x, z - this.z) > 6) {
+        this.x = x;
+        this.z = z;
+      }
+    }
+    if (Number.isFinite(facing)) this.target.facing = facing;
+    if (Number.isFinite(awareness)) this.awareness = awareness;
+    if (Number.isFinite(tier)) this.tier = tier;
+    if (state && STATE[state] && state !== STATE.PACIFIED && this.state !== STATE.PACIFIED) {
+      if (this.state !== STATE[state]) {
+        // The sting on a sighting is the one bit of state change a mirror has
+        // to hear about, because it is what tells a player they were seen.
+        if (STATE[state] === STATE.CHASE) {
+          horrorAudio.playDetected();
+          horrorAudio.playSightingStinger();
+        }
+        this.state = STATE[state];
+      }
+    }
+  }
+
+  // Positions arrive fifteen times a second and he runs at five metres of
+  // them; dropped straight onto each one he would advance in thirty-centimetre
+  // jerks. This walks him toward the last thing said about him instead, fast
+  // enough to be honest about where he is and smooth enough to be a body.
+  followRemote(delta) {
+    const t = Math.min(1, delta * 16);
+    this.x += (this.target.x - this.x) * t;
+    this.z += (this.target.z - this.z) * t;
+    this.facing += angleDelta(this.target.facing, this.facing) * t;
+  }
+
+  // What a mirror needs to draw and sound him.
+  netState() {
+    return {
+      x: round2(this.x), z: round2(this.z), f: round2(this.facing),
+      s: this.state, a: round2(this.awareness), t: this.tier
+    };
+  }
+
+  // He has taken somebody. With a crew that is not the end of the run, so he
+  // loses interest for a moment and wanders off — long enough that hauling a
+  // mate back off the deck is worth trying, short enough that standing over
+  // the body waiting for him to leave is not.
+  sate(seconds = 5) {
+    this.satedTimer = seconds;
+    this.awareness = 0;
+    this.lastKnown = null;
+    this.searchQueue = [];
+    this.enterState(STATE.PATROL, null);
+  }
+
+  // The person playing him does not want to be looking at the back of his own
+  // sketch all run, or listening to himself breathe down his own neck.
+  setEmbodied(embodied) {
+    this.embodied = embodied;
+    this.setVisible(!embodied);
+    if (embodied) {
+      this.glow.intensity = 0;
+      horrorAudio.setThreat(0);
+    }
+  }
+
+  setVisible(visible) {
+    this.sprite.visible = visible;
+    this.shadow.visible = visible;
   }
 
   updateAwareness(delta, player, see, hear, dist) {
@@ -458,13 +630,17 @@ export class GeilEnemy {
   }
 
   updateAudio(delta, dist) {
+    // Whoever is playing him hears their own boots through the player
+    // controller; his are not also theirs.
+    if (this.embodied) return;
     // Heartbeat tracks how much danger he actually represents, not raw range.
     const proximity = Math.max(0, 1 - dist / 24);
     const threat = Math.max(this.awareness * 0.85, proximity * 0.7);
     horrorAudio.setThreat(this.state === STATE.CHASE ? Math.max(threat, 0.85) : threat);
 
-    // Audible footsteps are how a player tracks him without seeing him.
-    if (dist < 26) {
+    // Audible footsteps are how a player tracks him without seeing him — and
+    // the one thing a person playing him can give away for free.
+    if (dist < 26 && (this.simulate || this.remoteMoving)) {
       this.stepTimer -= delta;
       if (this.stepTimer <= 0) {
         const speed = this.currentSpeed();
@@ -523,6 +699,10 @@ export class GeilEnemy {
 
   checkCaught(player, dist) {
     if (!this.isDeadly) return false;
+    // He has just taken somebody and is walking it off. Letting him grab the
+    // crewmate who came to help two seconds later would make going back for
+    // anybody a way of losing two people instead of one.
+    if (this.satedTimer > 0) return false;
 
     if (player.isHidden) {
       // Cover works, unless he is actively sweeping and reaches your stack.
@@ -567,6 +747,16 @@ export class GeilEnemy {
     this.awareness = 0;
     this.tier = 0;
     this.isDeadly = true;
+    this.satedTimer = 0;
+    this.focus = null;
+    this.embodied = false;
+    this.remoteMoving = false;
+    this.target = { x: this.x, z: this.z, facing: 0 };
+    this.distToPlayer = Infinity;
+    this.distToViewer = Infinity;
+    this.simulate = true;
+    this.authoritative = true;
+    this.setVisible(true);
     this.lastKnown = null;
     this.searchQueue = [];
     this.searchTimer = 0;
@@ -586,6 +776,12 @@ export class GeilEnemy {
       if (item && typeof item.dispose === 'function') item.dispose();
     }
   }
+}
+
+// Two decimals is a centimetre, which is finer than anything the eye or the
+// stealth arithmetic can tell apart, and it keeps a snapshot small.
+function round2(v) {
+  return Math.round(v * 100) / 100;
 }
 
 // Shortest signed angle from b to a, in (-PI, PI].

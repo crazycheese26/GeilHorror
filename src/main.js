@@ -11,6 +11,10 @@ import { TextureFactory } from './textures.js';
 import { horrorAudio } from './audio.js';
 import { Rng, makeSeed, formatSeed, parseSeed } from './rng.js';
 import { generateRunLayout } from './layout.js';
+import { Room, MAX_PLAYERS } from './net/room.js';
+import { NetSession, MODE, BLEED_SECONDS } from './net/session.js';
+import { CrewView } from './crew.js';
+import { makeRoomCode, normaliseCode, isValidCode } from './net/signal.js';
 
 const SETTINGS_KEY = 'geil.settings.v1';
 
@@ -31,13 +35,30 @@ const INTRO_CPS = 46;
 // How long the offering is left on screen before the ending is.
 const VICTORY_DELAY = 1.4;
 
+// What each mode is, in one line, on the lobby screen.
+const MODE_NOTES = {
+  coop: 'Mr. Geil hunts all of you at once. Caught is not dead — you go down ' +
+        'on the deck and somebody has to come and haul you back up before you ' +
+        'bleed out.',
+  hunt: 'One of you is Mr. Geil, in the first person, with no torch and no ' +
+        'lantaarntje — only a nose for whoever is making noise. The rest still ' +
+        'have five pillows to find.'
+};
+
+const DEFAULT_NAMES = [
+  'Piet', 'Roetveeg', 'Pepernoot', 'Wegwijs', 'Schoorsteen', 'Marsepein',
+  'Stoomboot', 'Kruidnoot', 'Lantaarn', 'Zwarte Piet'
+];
+
 const DEFAULT_SETTINGS = {
   controlScheme: 'mouse',
   brightness: 40,
   sensitivity: 1.0,
   volume: 75,
   // Empty means a new ship every run. Anything typed here pins the layout.
-  seed: ''
+  seed: '',
+  // What the rest of the crew sees over your head.
+  playerName: ''
 };
 
 class Game {
@@ -55,6 +76,17 @@ class Game {
     this.runSeed = 0;
     this.runLayout = null;
     this.runRng = null;
+
+    // Multiplayer. All three stay null for a run played alone, and every
+    // branch that reads them is written so that null is the game as it was.
+    this.room = null;
+    this.session = null;
+    this.crew = null;
+    this.netOutcome = null;
+    // The boat does not stop because one person opened the menu, so a paused
+    // crew run keeps simulating with the controller switched off.
+    this.netPaused = false;
+    this.joinOnBoot = null;
 
     this.introIndex = 0;
     this.introTyped = 0;
@@ -106,10 +138,14 @@ class Game {
       const value = String(this.settingValue(el.dataset.setting));
       if (el.value !== value) el.value = value;
     }
-    // Only write the seed box back when it disagrees, so typing in it does not
-    // fight the caret.
-    if (this.dom.seed && this.dom.seed.value !== this.settings.seed) {
-      this.dom.seed.value = this.settings.seed;
+    // Only write a seed box back when it disagrees, so typing in one does not
+    // fight the caret. There are two of them — the title screen's and the
+    // lobby's — and they are the same setting.
+    for (const el of this.dom.seedInputs) {
+      if (el.value !== this.settings.seed) el.value = this.settings.seed;
+    }
+    if (this.dom.name && this.dom.name.value !== this.settings.playerName) {
+      this.dom.name.value = this.settings.playerName;
     }
 
     this.saveSettings();
@@ -151,9 +187,37 @@ class Game {
       lantern: $('lantern'),
       objective: $('objective'),
       settingInputs: document.querySelectorAll('[data-setting]'),
-      seed: $('set-seed'),
+      seedInputs: document.querySelectorAll('[data-seed-input]'),
       seedLabels: document.querySelectorAll('[data-run-seed]'),
-      deathReason: $('death-reason')
+      deathReason: $('death-reason'),
+
+      // Crew
+      lobby: $('lobby-screen'),
+      name: $('set-name'),
+      joinCode: $('join-code'),
+      lobbyOpen: $('lobby-open'),
+      lobbyRoom: $('lobby-room'),
+      lobbyMode: $('lobby-mode'),
+      lobbyCrew: $('lobby-crew'),
+      lobbySeed: $('lobby-seed'),
+      modeNote: $('mode-note'),
+      crewList: $('crew-list'),
+      lobbyStatus: $('lobby-status'),
+      launch: $('btn-launch'),
+      roomCodes: document.querySelectorAll('[data-room-code]'),
+      crewPanel: $('crew-panel'),
+      huntPanel: $('hunt-panel'),
+      reukFill: $('reuk-fill'),
+      reukName: $('reuk-name'),
+      preyLeft: $('prey-left'),
+      downed: $('downed'),
+      bleedFill: $('bleed-fill'),
+      crewEnd: $('crew-end-screen'),
+      crewAgain: $('btn-crew-again'),
+      crewEndTitle: $('crew-end-title'),
+      crewEndText: $('crew-end-text'),
+      crewEndDetail: $('crew-end-detail'),
+      crewEndList: $('crew-end-list')
     };
   }
 
@@ -214,9 +278,12 @@ class Game {
   }
 
   attachItemHooks() {
-    this.items.onUnwrapped = (pillow, x, z, radius) => {
-      this.showToast(pillow.name, pillow.quote);
-      this.enemy.hearNoiseAt(x, z, radius / 30);
+    this.items.onUnwrapped = (pillow, x, z, radius, openerId) => {
+      const opener = this.session && openerId ? this.session.players.get(openerId) : null;
+      const by = opener && opener.id !== this.session.localId ? opener.name : null;
+      this.showToast(pillow.name, pillow.quote, by);
+      // Only the browser thinking for him gets to tell him about the bang.
+      if (!this.session || this.session.isHost) this.enemy.hearNoiseAt(x, z, radius / 30);
       this.enemy.setTier(this.items.collectedCount);
       this.updateObjective();
       this.renderPips();
@@ -231,7 +298,16 @@ class Game {
   //   auto  - use the seed typed on the title screen, or roll one
   //   keep  - sail the same ship again
   //   fresh - deal a different ship, even if one was pinned
-  planRun(mode = 'auto') {
+  //   net   - sail the host's ship, whose seed is handed in
+  planRun(mode = 'auto', seed = null) {
+    if (mode === 'net') {
+      this.runSeed = seed >>> 0;
+      this.runRng = new Rng(this.runSeed);
+      this.runLayout = generateRunLayout(this.map, this.runRng);
+      this.map.applyRunLayout(this.runLayout);
+      this.showSeed();
+      return;
+    }
     if (mode === 'fresh' && this.settings.seed) {
       // Asking for a new ship while holding a pinned one means letting go of it.
       this.settings.seed = '';
@@ -264,6 +340,14 @@ class Game {
     // Sint speaks first; the retry buttons skip him, because nobody wants the
     // briefing again on their ninth attempt.
     on('btn-start', 'click', () => this.beginIntro('auto'));
+    on('btn-crew', 'click', () => this.openLobby());
+    on('btn-host', 'click', () => this.hostGame());
+    on('btn-join', 'click', () => this.joinGame());
+    on('btn-copy', 'click', () => this.copyInvite());
+    on('btn-launch', 'click', () => this.launchCrewRun());
+    on('btn-lobby-back', 'click', () => this.leaveLobby());
+    on('btn-crew-again', 'click', () => this.crewBackToLobby());
+    on('btn-crew-leave', 'click', () => this.toMenu());
     on('btn-intro-next', 'click', () => this.advanceIntro());
     on('btn-intro-skip', 'click', () => this.startGame());
     on('btn-resume', 'click', () => this.resume());
@@ -290,16 +374,42 @@ class Game {
         this.applySettings();
       });
     }
-    on('set-seed', 'input', (e) => {
-      this.settings.seed = e.target.value;
-      this.saveSettings();
-    });
+    for (const el of this.dom.seedInputs) {
+      el.addEventListener('input', (e) => {
+        this.settings.seed = e.target.value;
+        this.saveSettings();
+        this.applySettings();
+      });
+    }
+    if (this.dom.name) {
+      this.dom.name.addEventListener('input', (e) => {
+        this.settings.playerName = e.target.value.slice(0, 14);
+        this.saveSettings();
+      });
+    }
+    if (this.dom.joinCode) {
+      // The code is five characters from an alphabet with no O and no I, so
+      // there is nothing to get wrong by typing it in lower case.
+      this.dom.joinCode.addEventListener('input', (e) => {
+        e.target.value = normaliseCode(e.target.value);
+      });
+      this.dom.joinCode.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') this.joinGame();
+      });
+    }
+    for (const el of document.querySelectorAll('[data-mode]')) {
+      el.addEventListener('click', () => {
+        if (this.session && this.session.isHost) this.session.setMode(el.dataset.mode);
+      });
+    }
 
     window.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        if (this.state === 'PLAYING') this.pause();
+        if (this.netPaused) this.resume();
+        else if (this.state === 'PLAYING') this.pause();
         else if (this.state === 'PAUSED') this.resume();
         else if (this.state === 'INTRO') this.toMenu();
+        else if (this.state === 'LOBBY') this.leaveLobby();
         return;
       }
       if (this.state === 'INTRO' && (e.key === 'Enter' || e.key === ' ')) {
@@ -324,6 +434,9 @@ class Game {
   beginIntro(mode = 'auto') {
     horrorAudio.init();
     horrorAudio.resume();
+    // Sint's briefing is the way into a run played alone; leaving a room open
+    // behind it would strand whoever was waiting in it.
+    this.closeRoom();
 
     // Deal the ship now, so a seed typed into the box is the boat he is
     // describing.
@@ -403,6 +516,7 @@ class Game {
     switch (this.state) {
       case 'MENU':
       case 'INTRO':
+      case 'LOBBY':
         horrorAudio.stopCues();
         horrorAudio.setBed('title', 1.0);
         break;
@@ -427,10 +541,15 @@ class Game {
       horrorAudio.setBed('explore');
       return;
     }
+    // Whoever is playing him is the reason the bed exists; it never lifts.
+    if (this.session && this.session.isHunter()) {
+      horrorAudio.setBed('stalk');
+      return;
+    }
 
     const hunting = e.state === STATE.CHASE || e.state === STATE.SEARCH ||
                     e.state === STATE.SUSPICIOUS;
-    const closing = e.distToPlayer < 11;
+    const closing = e.distToViewer < 11;
 
     if (hunting || e.awareness > 0.3 || closing) {
       this.calmTimer = 4.5;
@@ -457,9 +576,11 @@ class Game {
     this.show(this.dom.pause, false);
     this.show(this.dom.death, false);
     this.show(this.dom.victory, false);
+    this.show(this.dom.crewEnd, false);
     this.show(this.dom.hud, true);
 
     this.state = 'PLAYING';
+    this.netPaused = false;
     this.calmTimer = 0;
     this.updateMusic();
     this.player.setEnabled(true);
@@ -473,6 +594,18 @@ class Game {
 
   pause() {
     if (this.state !== 'PLAYING') return;
+
+    // The boat does not stop because one person opened the menu. The run keeps
+    // simulating with the controller switched off, so a crewmate who tabs away
+    // is a crewmate standing still — not four people frozen mid-corridor.
+    if (this.netRun()) {
+      this.netPaused = true;
+      this.player.setEnabled(false);
+      this.player.exitPointerLock();
+      this.show(this.dom.pause, true);
+      return;
+    }
+
     this.state = 'PAUSED';
     this.player.setEnabled(false);
     this.player.exitPointerLock();
@@ -482,6 +615,13 @@ class Game {
   }
 
   resume() {
+    if (this.netPaused) {
+      this.netPaused = false;
+      this.show(this.dom.pause, false);
+      this.player.setEnabled(true);
+      if (this.settings.controlScheme === 'mouse') this.player.requestPointerLock();
+      return;
+    }
     if (this.state !== 'PAUSED') return;
     this.show(this.dom.pause, false);
     this.state = 'PLAYING';
@@ -491,6 +631,7 @@ class Game {
   }
 
   toMenu() {
+    this.closeRoom();
     // Hold the ship as it was; pressing start plans the next one.
     this.resetRun('keep');
     this.state = 'MENU';
@@ -498,6 +639,8 @@ class Game {
     this.player.exitPointerLock();
     this.show(this.dom.pause, false);
     this.show(this.dom.intro, false);
+    this.show(this.dom.lobby, false);
+    this.show(this.dom.crewEnd, false);
     this.show(this.dom.hud, false);
     this.show(this.dom.title, true);
     this.updateMusic();
@@ -510,8 +653,8 @@ class Game {
     this.startGame();
   }
 
-  resetRun(mode = 'auto') {
-    this.planRun(mode);
+  resetRun(mode = 'auto', seed = null) {
+    this.planRun(mode, seed);
 
     this.items.dispose();
     this.items = new ItemManager(this.scene, this.map, this.runRng);
@@ -577,10 +720,600 @@ class Game {
     this.show(this.dom.victory, true);
   }
 
+  // --- The crew --------------------------------------------------------
+  //
+  // Everything below is the screen half of multiplayer: the lobby, the roster,
+  // the endings. The wire half is in src/net, and it never touches the DOM —
+  // net/session.js drives this class through a handful of named callbacks
+  // (beginNetRun, endNetRun, onCrew*, onReuk) and reads the world back out of
+  // world(). Single player never constructs any of it and never reads a branch
+  // that depends on it.
+
+  // The handful of objects the session is allowed to reach into.
+  world() {
+    return {
+      map: this.map,
+      player: this.player,
+      enemy: this.enemy,
+      items: this.items,
+      altar: this.altar,
+      crew: this.crew
+    };
+  }
+
+  // The session, but only while there is actually a run going on.
+  netRun() {
+    return this.session && this.session.phase === 'run' ? this.session : null;
+  }
+
+  reveal(el, visible) {
+    if (el) el.classList.toggle('is-hidden', !visible);
+  }
+
+  displayName() {
+    const typed = (this.settings.playerName || '').trim().slice(0, 14);
+    if (typed) return typed;
+    // Nobody should have to fill a form in to play with their friends.
+    return DEFAULT_NAMES[Math.floor(Math.random() * DEFAULT_NAMES.length)];
+  }
+
+  // --- Lobby ------------------------------------------------------------
+
+  openLobby(prefill = null) {
+    horrorAudio.init();
+    horrorAudio.resume();
+
+    this.state = 'LOBBY';
+    this.player.setEnabled(false);
+    this.player.exitPointerLock();
+    this.show(this.dom.title, false);
+    this.show(this.dom.intro, false);
+    this.show(this.dom.hud, false);
+    this.show(this.dom.crewEnd, false);
+    this.show(this.dom.lobby, true);
+    this.updateMusic();
+
+    if (prefill && this.dom.joinCode) this.dom.joinCode.value = normaliseCode(prefill);
+    this.setNetStatus('');
+    this.renderLobby();
+  }
+
+  leaveLobby() {
+    this.closeRoom();
+    this.toMenu();
+  }
+
+  hostGame() {
+    this.openRoom(makeRoomCode(), true);
+  }
+
+  joinGame() {
+    const code = normaliseCode(this.dom.joinCode ? this.dom.joinCode.value : '');
+    if (!isValidCode(code)) {
+      this.setNetStatus('A code is five characters — no O and no I.', 'warn');
+      return;
+    }
+    this.openRoom(code, false);
+  }
+
+  async openRoom(code, host) {
+    this.closeRoom();
+
+    const name = this.displayName();
+    this.settings.playerName = name;
+    this.applySettings();
+
+    const room = new Room({ code, host, name });
+    room.onstatus = (state, detail) => this.onRoomStatus(state, detail);
+    this.room = room;
+    this.session = new NetSession({ room, game: this, name });
+    this.session.assignHunter();
+
+    this.paintRoomCode(code);
+    this.renderLobby();
+    this.setNetStatus(host ? 'Opening a boat…' : 'Looking for that boat…');
+
+    const opened = await room.open();
+    if (!opened && this.room === room) {
+      this.setNetStatus(
+        'Could not reach the lobby service. Check the connection and try again.',
+        'bad'
+      );
+    }
+  }
+
+  onRoomStatus(state, detail) {
+    switch (state) {
+      case 'hosting':
+        this.setNetStatus(`Boat open. Read out ${detail}, or send the link.`);
+        break;
+      case 'joining':
+        this.setNetStatus('Knocking on the hull…');
+        break;
+      case 'handshaking':
+        this.setNetStatus('Found them. Opening a line…');
+        break;
+      case 'nohost':
+        this.setNetStatus(
+          'Nobody is holding that boat open. Check the code — and the host has ' +
+          'to still have the tab in front of them.',
+          'bad'
+        );
+        break;
+      case 'full':
+        this.setNetStatus(detail || 'That boat is full.', 'bad');
+        break;
+      case 'hostleft':
+        this.setNetStatus('The boat closed.', 'bad');
+        break;
+      case 'error':
+        if (detail) this.setNetStatus(detail, 'warn');
+        break;
+      default:
+        break;
+    }
+  }
+
+  closeRoom() {
+    if (this.room) {
+      this.room.close();
+      this.room = null;
+    }
+    this.session = null;
+    this.netOutcome = null;
+    this.netPaused = false;
+    if (this.crew) this.crew.clear();
+
+    // Put every switch multiplayer threw back where single player expects it.
+    delete document.body.dataset.net;
+    delete document.body.dataset.role;
+    this.player.setProfile('survivor');
+    this.player.setFrozen(false);
+    this.items.announceOnly = false;
+    this.items.onWantUnwrap = null;
+    this.enemy.setControl({ simulate: true, authoritative: true });
+    this.enemy.setEmbodied(false);
+    this.renderCrewHud();
+  }
+
+  inviteLink() {
+    if (!this.room) return '';
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.searchParams.set('room', this.room.code);
+    return url.toString();
+  }
+
+  copyInvite() {
+    const link = this.inviteLink();
+    if (!link) return;
+    const done = () => this.setNetStatus('Link copied. Send it to whoever is coming.');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done, () => this.setNetStatus(link));
+    } else {
+      // No clipboard (an insecure origin, usually). Showing it is still useful.
+      this.setNetStatus(link);
+    }
+  }
+
+  paintRoomCode(code) {
+    for (const el of this.dom.roomCodes) el.textContent = code || '-----';
+  }
+
+  setNetStatus(text, tone = '') {
+    const el = this.dom.lobbyStatus;
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('is-warn', tone === 'warn');
+    el.classList.toggle('is-bad', tone === 'bad');
+  }
+
+  renderLobby() {
+    const session = this.session;
+    const inRoom = !!(session && this.room);
+    const host = inRoom && session.isHost;
+
+    this.reveal(this.dom.lobbyOpen, !inRoom);
+    this.reveal(this.dom.lobbyRoom, inRoom);
+    this.reveal(this.dom.lobbyMode, inRoom);
+    this.reveal(this.dom.lobbyCrew, inRoom);
+    this.reveal(this.dom.lobbySeed, host);
+
+    if (!inRoom) {
+      this.reveal(this.dom.launch, false);
+      return;
+    }
+
+    for (const el of document.querySelectorAll('[data-mode]')) {
+      el.classList.toggle('is-active', el.dataset.mode === session.mode);
+      el.disabled = !host;
+    }
+    if (this.dom.modeNote) this.dom.modeNote.textContent = MODE_NOTES[session.mode] || '';
+
+    this.paintCrewList(this.dom.crewList, session, host);
+
+    // The hunt needs somebody to hunt.
+    const enough = session.mode !== MODE.HUNT || session.playerCount() >= 2;
+    this.reveal(this.dom.launch, host);
+    if (this.dom.launch) {
+      this.dom.launch.disabled = !enough;
+      this.dom.launch.textContent = enough ? 'Go below' : 'Waiting for a crew';
+    }
+    const me = session.local();
+    // Never over the top of something that went wrong.
+    if (!host && me && this.dom.lobbyStatus &&
+        !this.dom.lobbyStatus.classList.contains('is-bad')) {
+      this.setNetStatus(`Aboard as ${me.name}. Waiting for the host to cast off.`);
+    }
+  }
+
+  paintCrewList(list, session, host) {
+    if (!list) return;
+    list.innerHTML = '';
+
+    for (const player of session.crew()) {
+      const row = document.createElement('li');
+      row.style.color = player.css;
+      row.classList.toggle('is-you', player.id === session.localId);
+      row.classList.toggle('is-gone', !player.present || player.dead);
+
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = player.name + (player.id === session.localId ? ' (you)' : '');
+
+      const role = document.createElement('span');
+      role.className = 'role';
+      if (session.isHunter(player.id)) {
+        role.classList.add('is-geil');
+        role.textContent = 'Mr. Geil';
+      } else if (player.dead) {
+        role.textContent = 'taken';
+      } else if (player.down) {
+        role.textContent = 'down';
+      } else if (player.id === session.room.hostId) {
+        role.textContent = 'host';
+      }
+
+      row.append(tag, who, role);
+
+      // The host can hand the mask to anybody in the room.
+      if (host && session.mode === MODE.HUNT && !session.isHunter(player.id) &&
+          session.phase === 'lobby') {
+        const pick = document.createElement('button');
+        pick.type = 'button';
+        pick.className = 'pick';
+        pick.textContent = 'play him';
+        pick.addEventListener('click', () => session.setHunter(player.id));
+        row.appendChild(pick);
+      }
+
+      list.appendChild(row);
+    }
+  }
+
+  launchCrewRun() {
+    if (!this.session || !this.session.isHost) return;
+    const pinned = parseSeed(this.settings.seed);
+    this.session.startRun(pinned === null ? makeSeed() : pinned);
+  }
+
+  // --- Session callbacks -------------------------------------------------
+
+  onCrewChanged() {
+    if (this.state === 'LOBBY') this.renderLobby();
+    this.renderCrewHud();
+  }
+
+  // One crewmate's position, on its way to being drawn. The person playing
+  // Mr. Geil is not drawn as a crewmate — he is drawn as Mr. Geil, from the
+  // enemy's own transform — so his frames stop here.
+  onCrewFrame(player) {
+    if (!this.crew || !this.session) return;
+    if (this.session.isHunter(player.id)) return;
+    this.crew.push(player.id, {
+      x: player.x, z: player.z, yaw: player.yaw, gait: player.gait,
+      torch: player.torch, sneak: player.sneak, hidden: player.hidden,
+      down: player.down, dead: player.dead
+    }, performance.now() / 1000);
+  }
+
+  onCrewEvent(kind, player) {
+    const session = this.session;
+    const mine = session && player.id === session.localId;
+
+    if (kind === 'down') {
+      horrorAudio.playCrewDown();
+      this.showToast(mine ? 'He has you' : `${player.name} is down`,
+        mine ? 'Hold on. Somebody has to come and get you.'
+             : 'Get to them before they bleed out.');
+    } else if (kind === 'up') {
+      horrorAudio.playCrewUp();
+      this.showToast(mine ? 'On your feet' : `${player.name} is up`,
+        'Move. He knows where that was.');
+    } else if (kind === 'gone') {
+      this.showToast(mine ? 'He took you' : `${player.name} is gone`,
+        mine ? 'Watch the rest of it from where you fell.' : 'One fewer pair of hands.');
+      if (mine) horrorAudio.playJumpscare();
+    }
+    this.renderCrewHud();
+  }
+
+  onReuk(reuk) {
+    horrorAudio.playReuk(reuk.strength);
+  }
+
+  // --- Running with a crew ----------------------------------------------
+
+  beginNetRun(session) {
+    const me = session.local();
+    const hunter = session.isHunter();
+
+    // The seed is the ship. Everybody deals the same one from it, so none of
+    // the layout has to travel.
+    this.resetRun('net', session.seed);
+
+    this.player.setProfile(hunter ? 'geil' : 'survivor');
+    this.player.reset(this.berthFor(session, me));
+
+    this.enemy.viewer = this.player;
+    this.enemy.setControl({
+      simulate: session.isHost && session.mode === MODE.COOP,
+      authoritative: session.isHost
+    });
+    this.enemy.setEmbodied(hunter);
+    if (session.mode === MODE.HUNT) {
+      // Park him on the hunter's berth, so nobody watches him slide across the
+      // ship on the first snapshot.
+      const berth = this.runLayout.enemySpawn;
+      this.enemy.applyRemote({ x: berth.x, z: berth.z });
+    }
+
+    // The host rules on who tore which pakje open, so finishing the hold asks
+    // rather than opens. See items.js.
+    this.items.announceOnly = true;
+    this.items.onWantUnwrap = (present) => session.requestTear(present.id);
+
+    // Built once, here, in the lobby — never mid-run. Every crewmate's torch
+    // is a real light, and adding one to a live scene recompiles every
+    // material in it.
+    if (!this.crew) this.crew = new CrewView(this.scene, MAX_PLAYERS - 1);
+    this.crew.clear();
+    this.crew.setRoster(session.others().filter(p => !session.isHunter(p.id)));
+
+    document.body.dataset.net = 'crew';
+    document.body.dataset.role = hunter ? 'hunter' : 'survivor';
+    this.netOutcome = null;
+    this.netPaused = false;
+    this.paintRoomCode(this.room ? this.room.code : '');
+
+    this.show(this.dom.lobby, false);
+    this.startGame();
+    this.renderCrewHud();
+  }
+
+  // Where one player wakes up on this run. Read off the layout, which every
+  // browser dealt for itself, so the session can seat the whole roster without
+  // a byte of it going over the wire.
+  berthFor(session, me) {
+    if (!me || !this.runLayout) return this.map.playerStart;
+    if (session.isHunter(me.id)) {
+      const spawn = this.runLayout.enemySpawn;
+      return { x: spawn.x, z: spawn.z };
+    }
+    const berths = (this.runLayout.crewSpawns && this.runLayout.crewSpawns.length)
+      ? this.runLayout.crewSpawns
+      : [this.map.playerStart];
+    return berths[(me.berth || 0) % berths.length];
+  }
+
+  endNetRun(outcome, detail) {
+    this.netOutcome = { outcome, detail };
+    this.netPaused = false;
+    this.show(this.dom.pause, false);
+
+    // A room that falls apart while everybody is still in the lobby is not an
+    // ending; it is a message and a door back to the code box.
+    if (this.state !== 'PLAYING') {
+      const copy = this.crewEndCopy(outcome, false);
+      this.closeRoom();
+      this.renderLobby();
+      this.setNetStatus(copy.text, 'bad');
+      return;
+    }
+
+    if (outcome === 'offered' && this.state === 'PLAYING') {
+      // The same beat as a run played alone: watch him take it, then the screen.
+      if (!this.altar.isOffered) this.altar.complete(this.enemy);
+      this.victoryTimer = VICTORY_DELAY;
+      return;
+    }
+    this.showCrewEnd(outcome, detail);
+  }
+
+  showCrewEnd(outcome, detail) {
+    const session = this.session;
+    const hunter = !!(session && session.isHunter());
+    const won = outcome === 'offered' ? !hunter
+      : outcome === 'taken' ? hunter
+        : null;
+
+    this.state = 'CREWEND';
+    this.victoryTimer = 0;
+    this.player.setEnabled(false);
+    this.player.setFrozen(false);
+    this.player.exitPointerLock();
+
+    horrorAudio.setThreat(0);
+    horrorAudio.stopCues();
+    if (won === true) {
+      horrorAudio.playVictoryTheme();
+    } else if (won === false) {
+      horrorAudio.setBed(null, 0.6);
+      horrorAudio.playGameOverTheme();
+    } else {
+      horrorAudio.setBed('title', 1.2);
+    }
+
+    const copy = this.crewEndCopy(outcome, hunter);
+    if (this.dom.crewEndTitle) this.dom.crewEndTitle.textContent = copy.title;
+    if (this.dom.crewEndText) this.dom.crewEndText.textContent = copy.text;
+    if (this.dom.crewEndDetail) this.dom.crewEndDetail.textContent = detail || '';
+    if (session) this.paintCrewList(this.dom.crewEndList, session, false);
+
+    if (this.dom.crewEnd) {
+      this.dom.crewEnd.classList.toggle('is-won', won === true);
+      this.dom.crewEnd.classList.toggle('is-lost', won === false);
+    }
+    // There is only a lobby to go back to if the boat is still afloat: a run
+    // that ended because the host closed their tab has nowhere to return to.
+    const afloat = !!(this.room && !this.room.closed &&
+      (this.room.isHost || this.room.hostId));
+    this.reveal(this.dom.crewAgain, afloat);
+    this.show(this.dom.hud, false);
+    this.show(this.dom.crewEnd, true);
+  }
+
+  crewEndCopy(outcome, hunter) {
+    switch (outcome) {
+      case 'offered':
+        return hunter ? {
+          title: 'HIJ KREEG ZIJN KUSSENS',
+          text: 'They got five of them onto the altar in het ruim while you were ' +
+                'somewhere else on the ship, and everything you wanted went out ' +
+                'of you at once. The hold is quiet. You are, for the rest of the ' +
+                'crossing, satisfied.'
+        } : {
+          title: 'HET OFFER IS GEBRACHT',
+          text: 'Five pakjes torn open in the dark and five soft pillows laid out ' +
+                'in a row on the warm altar. Nobody is hunting anybody any more, ' +
+                'and the stoomboot comes safely ashore with all of you still on it.'
+        };
+      case 'taken':
+        return hunter ? {
+          title: 'DE BOOT IS VAN JOU',
+          text: 'Every one of them is on the deck and the altar is still cold. ' +
+                'Sinterklaas waits topside for people who are not coming back up, ' +
+                'and below deck you have the run of the ship.'
+        } : {
+          title: 'HIJ HEEFT JULLIE ALLEMAAL',
+          text: 'The altar stays cold. The stoomboot sails on without a single one ' +
+                'of you, and he is — at last — extra geil.'
+        };
+      case 'hostgone':
+        return {
+          title: 'DE BOOT IS WEG',
+          text: 'Whoever opened this boat closed their tab, and it went down with ' +
+                'them. Open a new one and start again.'
+        };
+      default:
+        return {
+          title: 'DE OVERTOCHT IS AFGEBROKEN',
+          text: 'The crossing ended before it finished.'
+        };
+    }
+  }
+
+  crewBackToLobby() {
+    if (!this.session || !this.room || this.room.closed) {
+      this.leaveLobby();
+      return;
+    }
+    this.session.backToLobby();
+    delete document.body.dataset.net;
+    delete document.body.dataset.role;
+    this.player.setProfile('survivor');
+    this.player.setFrozen(false);
+    this.enemy.setEmbodied(false);
+    if (this.crew) this.crew.clear();
+    this.show(this.dom.crewEnd, false);
+    this.openLobby();
+  }
+
+  // --- Crew HUD ----------------------------------------------------------
+
+  // Rebuilt rather than diffed: four rows a few times a second is nothing, and
+  // there is no state to get out of step.
+  renderCrewHud() {
+    const panel = this.dom.crewPanel;
+    if (!panel) return;
+    panel.innerHTML = '';
+
+    const session = this.netRun();
+    if (!session) return;
+
+    for (const player of session.crew()) {
+      if (player.id === session.localId) continue;
+
+      const row = document.createElement('div');
+      row.className = 'crew-row';
+      row.style.color = player.css;
+      const geil = session.isHunter(player.id);
+      row.classList.toggle('is-geil', geil);
+      row.classList.toggle('is-down', player.down && !player.dead);
+      row.classList.toggle('is-gone', player.dead || !player.present);
+
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = player.name;
+      const how = document.createElement('span');
+      how.className = 'how';
+      how.textContent = !player.present ? 'gone'
+        : geil ? 'hunting'
+          : player.dead ? 'taken'
+            : player.down ? `down ${Math.max(0, Math.ceil(player.bleed))}s`
+              : player.hidden ? 'hidden' : '';
+
+      row.append(tag, who, how);
+      panel.appendChild(row);
+    }
+  }
+
+  paintReuk(session) {
+    const d = this.dom;
+    const reuk = session.reuk;
+
+    if (d.reukFill) d.reukFill.style.width = `${Math.round(reuk.strength * 100)}%`;
+    if (d.reukName) {
+      d.reukName.textContent = reuk.strength > 0.02 ? (reuk.name || '') : '— stil —';
+    }
+    if (d.preyLeft) {
+      const left = session.upright().length;
+      d.preyLeft.textContent = `${left} still standing`;
+    }
+    if (d.threatRing) {
+      const show = reuk.strength > 0.02;
+      d.threatRing.classList.toggle('is-visible', show);
+      if (show) {
+        const angle = this.screenBearing(reuk.dx, reuk.dz);
+        d.threatRing.style.transform = `translate(-50%, -50%) rotate(${angle}rad)`;
+        d.threatRing.style.opacity = String(Math.min(1, 0.3 + reuk.strength * 0.7));
+      }
+    }
+  }
+
+  // A world-space direction, as an angle around the crosshair.
+  screenBearing(dx, dz) {
+    const yaw = this.player.yaw;
+    const fwd = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
+    const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
+    return Math.atan2(dx * right.x + dz * right.z, dx * fwd.x + dz * fwd.z);
+  }
+
   // --- Simulation ------------------------------------------------------
 
   update(delta) {
     if (this.state !== 'PLAYING') return;
+
+    const net = this.netRun();
+    const me = net ? net.local() : null;
+    // On the deck the head still turns; the body does not.
+    const downed = !!(me && (me.down || me.dead));
+    this.player.setFrozen(downed);
 
     this.player.update(delta);
     const pos = this.player.getPosition();
@@ -588,15 +1321,30 @@ class Game {
     this.map.update(delta, this.clock.elapsedTime, pos);
 
     const interactPressed = this.player.consumeInteract();
-    const interactHeld = this.player.interactHeld;
+    const interactHeld = this.player.interactHeld && !downed;
 
-    const altarState = this.altar.update(delta, pos, interactHeld, this.items);
-    const canOpenPresents = !this.player.isHidden && !altarState.canOffer;
+    const altarState = this.altar.update(delta, pos, interactHeld, this.items, {
+      remoteOffering: net ? net.remoteOffering() : false,
+      // Only the host rules on the offering; the rest are shown where it is up
+      // to, so two browsers cannot both decide the run is over.
+      driven: !!net && !net.isHost
+    });
+
+    // Holding E over a crewmate on the deck is hauling them up, not quietly
+    // tearing the paper off a pakje that happens to be lying next to them.
+    const canOpenPresents = !this.player.isHidden && !altarState.canOffer &&
+      !downed && !(net && (net.isHunter() || net.reviveTarget));
     const itemState = this.items.update(delta, pos, interactHeld, canOpenPresents);
 
-    this.handleHiding(interactPressed, pos, itemState, altarState);
+    if (!downed) this.handleHiding(interactPressed, pos, itemState, altarState);
 
-    if (altarState.canOffer && altarState.progress >= 1 && !this.altar.isOffered) {
+    if (net) {
+      if (net.isHost && !this.altar.isOffered && this.altar.progress >= 1 &&
+          this.items.isReadyForTribute()) {
+        this.altar.complete(this.enemy);
+        net.onOffered();
+      }
+    } else if (altarState.canOffer && altarState.progress >= 1 && !this.altar.isOffered) {
       this.altar.complete(this.enemy);
       // A beat to watch him take the offering before the screen comes up. It
       // runs on the loop rather than a timer, because pausing in that gap has
@@ -607,14 +1355,33 @@ class Game {
 
     if (this.victoryTimer > 0) {
       this.victoryTimer -= delta;
-      if (this.victoryTimer <= 0) this.triggerVictory();
+      if (this.victoryTimer <= 0) {
+        if (this.netOutcome) this.showCrewEnd(this.netOutcome.outcome, this.netOutcome.detail);
+        else this.triggerVictory();
+      }
     }
 
-    this.enemy.update(delta, this.player, () => this.triggerDeath());
+    // The session first, so a body driven by a person is in place before he is
+    // asked what he can reach.
+    if (net) net.update(delta);
+
+    // Mr. Geil. The host thinks for him and rules on who he caught; every
+    // other browser only draws and sounds him. See enemy.js: setControl.
+    this.enemy.viewer = this.player;
+    if (net) {
+      const targets = net.isHost ? net.huntTargets(this.world()) : [this.player];
+      this.enemy.update(delta, targets,
+        net.isHost ? (target) => net.onCatch(target, this.world()) : null);
+    } else {
+      this.enemy.update(delta, this.player, () => this.triggerDeath());
+    }
+
+    if (net && this.crew) this.crew.update(delta, pos, { showNames: !net.isHunter() });
+
     this.updateMusicMood(delta);
     this.updateLantern(delta);
 
-    this.updateHud(pos, itemState, altarState);
+    this.updateHud(pos, itemState, altarState, net);
     this.updateZone(pos, delta);
   }
 
@@ -638,7 +1405,7 @@ class Game {
 
   // --- HUD -------------------------------------------------------------
 
-  updateHud(pos, itemState, altarState) {
+  updateHud(pos, itemState, altarState, net = null) {
     const d = this.dom;
 
     const staminaPct = (this.player.stamina / this.player.maxStamina) * 100;
@@ -651,18 +1418,59 @@ class Game {
     if (d.pillowCount) d.pillowCount.textContent = String(this.items.collectedCount);
     if (d.torch) d.torch.classList.toggle('is-off', !this.player.flashlightOn);
 
-    this.updatePrompt(itemState, altarState);
-    this.updateAwareness(pos);
+    this.updatePrompt(itemState, altarState, net);
+    this.updateAwareness(pos, net);
+    this.updateCrewHud(net);
   }
 
-  updatePrompt(itemState, altarState) {
+  updateCrewHud(net) {
+    const d = this.dom;
+    if (!net) {
+      if (d.downed) d.downed.classList.remove('is-visible');
+      return;
+    }
+
+    const me = net.local();
+    const down = !!(me && me.down && !me.dead);
+    if (d.downed) d.downed.classList.toggle('is-visible', down);
+    if (down && d.bleedFill) {
+      const left = Math.max(0, Math.min(1, me.bleed / BLEED_SECONDS));
+      d.bleedFill.style.width = `${(left * 100).toFixed(1)}%`;
+    }
+
+    // The roster only changes once a second or so; rebuilding it every frame
+    // would be four DOM trees for nothing.
+    this.crewHudTimer = (this.crewHudTimer || 0) - 1;
+    if (this.crewHudTimer <= 0) {
+      this.crewHudTimer = 15;
+      this.renderCrewHud();
+    }
+  }
+
+  updatePrompt(itemState, altarState, net = null) {
     const d = this.dom;
     if (!d.prompt) return;
 
     let text = null;
     let progress = 0;
+    const me = net ? net.local() : null;
 
-    if (this.player.isHidden) {
+    if (me && (me.down || me.dead)) {
+      // The downed panel says everything there is to say.
+      d.prompt.classList.remove('is-visible');
+      return;
+    }
+
+    if (net && net.reviveTarget) {
+      // Hauling a crewmate up outranks everything else you could be doing.
+      if (net.isHunter()) {
+        text = `Hold [E] to make sure of ${net.reviveTarget.name}`;
+        progress = net.finishProgress;
+      } else {
+        text = `Hold [E] to get ${net.reviveTarget.name} back up`;
+        progress = net.reviveProgress;
+      }
+    } else if (this.player.isHidden) {
       text = 'Hidden — [E] to climb out';
     } else if (altarState.canOffer) {
       text = 'Hold [E] to lay out the five offerings';
@@ -687,8 +1495,19 @@ class Game {
     if (d.promptFill) d.promptFill.style.transform = `scaleX(${progress})`;
   }
 
-  updateAwareness(pos) {
+  updateAwareness(pos, net = null) {
     const d = this.dom;
+
+    // Playing him, there is no ring: what he has is a nose, and it reads on
+    // the same chevron the crew read him off.
+    if (net && net.isHunter()) {
+      if (d.awareness) d.awareness.classList.remove('is-visible');
+      if (d.danger) d.danger.style.opacity = '0';
+      if (d.hiddenMask) d.hiddenMask.classList.remove('is-visible');
+      this.paintReuk(net);
+      return;
+    }
+
     const a = this.enemy.awareness;
     const chasing = this.enemy.state === STATE.CHASE;
 
@@ -706,15 +1525,7 @@ class Game {
       const showRing = a > 0.4 || chasing;
       d.threatRing.classList.toggle('is-visible', showRing);
       if (showRing) {
-        const toX = this.enemy.x - pos.x;
-        const toZ = this.enemy.z - pos.z;
-        const yaw = this.player.yaw;
-        const fwd = { x: -Math.sin(yaw), z: -Math.cos(yaw) };
-        const right = { x: Math.cos(yaw), z: -Math.sin(yaw) };
-        const bearing = Math.atan2(
-          toX * right.x + toZ * right.z,
-          toX * fwd.x + toZ * fwd.z
-        );
+        const bearing = this.screenBearing(this.enemy.x - pos.x, this.enemy.z - pos.z);
         d.threatRing.style.transform = `translate(-50%, -50%) rotate(${bearing}rad)`;
         d.threatRing.style.opacity = String(Math.min(1, 0.35 + a * 0.65));
       }
@@ -733,7 +1544,11 @@ class Game {
   // into a rate. Straight-line distance, so it counts a bulkhead for nothing,
   // and no bearing, so it never does the hiding for you.
   updateLantern(delta) {
-    this.lantern.update(delta, this.enemy.distToPlayer, this.enemy.state === STATE.PACIFIED);
+    // Sint gave the lamp to whoever went down to make the offering. The person
+    // playing Mr. Geil is not that person, and it stays dark for them.
+    const quiet = this.enemy.state === STATE.PACIFIED ||
+      !!(this.session && this.session.isHunter());
+    this.lantern.update(delta, this.enemy.distToViewer, quiet);
     if (this.lantern.ticked) horrorAudio.playLanternTick(this.lantern.proximity);
     this.paintLantern();
   }
@@ -796,12 +1611,12 @@ class Game {
     }
   }
 
-  showToast(name, quote) {
+  showToast(name, quote, by = null) {
     if (!this.dom.toast) return;
     this.dom.toast.innerHTML = '';
 
     const heading = document.createElement('strong');
-    heading.textContent = name;
+    heading.textContent = by ? `${by} — ${name}` : name;
     const line = document.createElement('em');
     line.textContent = `"${quote}"`;
 
@@ -825,7 +1640,7 @@ class Game {
       const shake = Math.max(0, 0.5 - this.deathTimer) * 0.14;
       this.camera.position.x += (Math.random() - 0.5) * shake;
       this.camera.position.y += (Math.random() - 0.5) * shake;
-      this.enemy.updateVisual(delta, this.player, this.enemy.distToPlayer);
+      this.enemy.updateVisual(delta, this.player, this.enemy.distToViewer);
     }
 
     this.renderer.render(this.scene, this.camera);
@@ -839,5 +1654,16 @@ window.addEventListener('DOMContentLoaded', () => {
       '(<code>python3 -m http.server</code>) and reload.</div>';
     return;
   }
-  new Game();
+  const game = new Game();
+  // A handle on the running game, for the browser console and for driving a
+  // real two-browser run from a test. Nothing in the game reads it.
+  window.GEIL = game;
+
+  // ?room=ABCDE — the link the host copies out of the lobby. It opens the
+  // lobby with the code already in the box rather than joining on its own, so
+  // nobody is dropped into a stranger's boat by clicking a link.
+  try {
+    const invited = new URL(window.location.href).searchParams.get('room');
+    if (invited && isValidCode(invited)) game.openLobby(invited);
+  } catch (err) { /* a URL we cannot parse is not a reason to not boot */ }
 });

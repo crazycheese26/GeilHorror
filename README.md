@@ -6,8 +6,12 @@ A first-person stealth horror game set in the dark corridors of Sinterklaas'
 steamboat. Mr. Geil wants to eat you. Five anime body pillows will change his
 mind. The boat is dealt fresh every run.
 
+Play it alone, or with two to four of you: co-op against the AI, or **de
+jacht**, where one of you *is* Mr. Geil.
+
 Three.js, the Web Audio API and six mp3s, no build step, no dependencies to
-install. Drop the folder on any static host and it runs.
+install, and — including the multiplayer — no server. Drop the folder on any
+static host and it runs.
 
 ---
 
@@ -59,6 +63,115 @@ where you went. Cover is the answer, not speed.
 Every pillow you collect makes him faster and sharper. After the fifth he
 starts drifting toward your part of the ship on his own, so the walk back to
 the altar is the hardest part of the run.
+
+---
+
+## Met z'n allen
+
+Two to four of you, browser to browser. **Sail with a crew** on the title
+screen; one of you opens a boat and reads out the five-character code, and
+everybody else types it in or opens the link. The person who opened it picks
+the mode, deals the ship and starts the run.
+
+### Co-op
+
+Mr. Geil is the same Mr. Geil. He hunts the whole crew at once — sight, hearing
+and one memory between the lot of you — and works on whoever is giving
+themselves away hardest, which means the loudest person on the ship is
+everyone's problem. Five pillows finish the run whoever tore the paper, so the
+sensible thing is to spread out, and the sensible thing is also how people get
+caught alone.
+
+Caught is not dead. You go down on the deck with about **fifty seconds** on you,
+and a crewmate has to reach you and hold **E** for four to get you back up.
+Sint's lamp goes out while you are down, the compartment goes quiet, and the
+only thing you can do is look. Mr. Geil has what he came for and wanders off for
+five seconds after taking somebody — long enough that going back for them is
+worth trying, short enough that standing over the body is not. With nobody left
+upright there is nobody coming, and the clock runs six times faster.
+
+### De jacht
+
+One player is Mr. Geil, in the first person. The AI is switched off on every
+machine and his body comes down the wire like anyone else's.
+
+He is a different body, not a faster one. He **walks** at 4.35 m/s — quicker
+than your walk, slower than your sprint — so a survivor who spots him early
+breaks away for the four seconds their breath lasts and then has to have found
+cover. He never has to stop. His sprint is a **lunge**: two and a half seconds
+of 6.5 m/s, and then nothing at all until his breath has come all the way back,
+which makes reaching for somebody a decision instead of a habit. He can go quiet
+by sneaking, at the cost of most of his speed.
+
+What he does not have is a torch or a lantaarntje. What he has is **de reuk**: a
+pulse every three and a half seconds that gives him the direction of whoever is
+making the most noise, with the error shrinking as the noise grows. Standing
+still leaves nothing. Sneaking carries eight metres. Sprinting carries
+forty-six, across half the ship. It is the AI's hearing, handed to a person —
+so everything the game already taught you about being quiet is still exactly
+the game.
+
+He can hold **E** over somebody on the deck for two and a half seconds to make
+sure of them, which costs him the time he would otherwise spend finding the
+ones still upright. The crew still win by getting five pillows onto the altar;
+he wins when there is nobody left.
+
+Survivors get no awareness ring and no chevron in de jacht. There is no AI
+belief to read off him. There is the lantaarntje, and there are his boots on
+the deck.
+
+### Nobody is running a server
+
+GitHub Pages serves files. It cannot run a lobby, and there is no server behind
+this game — not a rented one, not a free tier, not an account anywhere.
+
+Browsers can talk to each other directly over **WebRTC** once they have swapped
+a session description, and that swap is the only part that needs a third party.
+It goes through [ntfy.sh](https://ntfy.sh), a free public pub/sub service that
+needs no key and no account: the room code hashes to a topic, everyone in the
+room subscribes to it, and the four or five messages it takes to shake hands go
+over it. Then the topic goes quiet and every byte for the rest of the run is
+peer to peer.
+
+The shape is a **star**, not a mesh. Everyone connects to the host and nobody
+else; the host forwards anything addressed past itself. Three connections
+instead of six, one clock instead of four, and the host is already the authority
+on the world because it is the one running Mr. Geil.
+
+**The ship is never sent.** `layout.js` is deterministic, so the seed is the
+whole boat: the pakjes, the pillow inside each one, his berth, his circuit, the
+dead lanterns and every crew berth all come out identical on four machines
+without a byte being spent on them. What actually travels is only what a seed
+cannot predict — where people are, fifteen times a second, and what they have
+done.
+
+The host rules on the world and nothing else. It runs Mr. Geil, decides who he
+caught, says which pakje was torn open by whom, and calls the offering. It does
+**not** rule on where anybody is standing: every player walks their own body at
+full frame rate and simply reports where they ended up. That is the difference
+between a corridor that feels solid under you and one that drags you backwards
+every time the connection hiccups, and nobody needs protecting from their
+friends in a Sinterklaas horror game.
+
+Positions go out on an unreliable channel and arrive fifteen times a second, so
+nothing is drawn where a packet said: the last two are kept and every crewmate
+is rendered a tenth of a second in the past, between them. Mr. Geil is walked
+toward the last thing the host said about him rather than dropped onto it.
+Events that must not be lost — a pakje opened, somebody going down, the run
+ending — go on a reliable one.
+
+### What it cannot do
+
+- **The room is the host's tab.** Close it and the boat goes down with it.
+  There is nowhere for a room to live when nobody is holding it open.
+- **No reconnecting.** A dropped player is gone for that run; the room takes
+  joiners again from the ending screen.
+- **Two players behind strict NATs may not connect.** A free public TURN relay
+  is configured as a fallback in `src/net/peer.js`, and if it has gone away the
+  game still connects for most people. Paste your own credentials there if you
+  want a guaranteed one.
+- **A room code is the only thing keeping a room private**, the same as every
+  party-code game. It is five characters out of thirty-three million.
 
 ---
 
@@ -160,6 +273,10 @@ move and turn under either scheme.
 | `E` / `Space` / click | hold to open a present or lay out the offering; press to hide behind a crate |
 | `Esc` | pause |
 
+With a crew, `E` also hauls a downed crewmate off the deck — and, if you are
+playing Mr. Geil, makes sure of one. Pausing in a crew run opens the menu and
+hands the pointer back without stopping the boat: the run carries on around you.
+
 Brightness, mouse sensitivity and volume are on the title and pause screens,
 and the seed box is on the title screen. The game is genuinely dark by design —
 turn brightness up rather than playing blind. Settings persist in
@@ -178,10 +295,16 @@ python3 -m http.server 8000
 # then open http://localhost:8000
 ```
 
+To try multiplayer on one machine, open it twice — a normal window and a
+private one, so the two tabs do not share a name in `localStorage`. The running
+game is on `window.GEIL` in the console if you want to poke at it.
+
 ### GitHub Pages
 
 Push the folder, then **Settings → Pages → Deploy from a branch**, pick your
-branch and `/ (root)`. No build step.
+branch and `/ (root)`. No build step, and multiplayer works from the same
+static files — the only thing the page reaches for is a public pub/sub topic to
+carry the handshake, and after that the browsers are talking to each other.
 
 Play the live version at [https://crazycheese26.github.io/GeilHorror/](https://crazycheese26.github.io/GeilHorror/).
 
@@ -194,19 +317,26 @@ index.html          markup and the HUD
 css/style.css       interface
 libs/three.min.js   Three.js r128, vendored, with a CDN fallback
 assets/             the hand-drawn Mr. Geil and Sinterklaas sketches
+  PlayerSprite.png  the crewmate everybody else sees you as
   audio/            the six-track soundtrack
 src/
-  main.js           game loop, state machine, Sint's briefing, settings, all DOM access
+  main.js           game loop, state machine, Sint's briefing, the lobby, all DOM access
   map.js            corridor layout, geometry, lighting, line of sight, pathfinding
-  player.js         both control schemes, gait, stamina, noise, torch, hiding
-  enemy.js          Mr. Geil: perception, memory, state machine
+  player.js         both control schemes, both bodies, gait, stamina, noise, torch, hiding
+  enemy.js          Mr. Geil: perception, memory, state machine, and being driven
   items.js          presents and the pillows inside them
   tribute.js        the altar and the ending
   lantern.js        Sint's lamp: how near he is, turned into a rate
-  layout.js         the per-run ship: pakjes, his berth, his circuit, dead lanterns
+  layout.js         the per-run ship: pakjes, his berth, his circuit, dead lanterns, berths
   rng.js            seeded generator and the seed codes
   textures.js       every texture, drawn to canvas at runtime
   audio.js          synthesised sfx, and the soundtrack's crossfades and cues
+  crew.js           the other players: sprites, torches, interpolation, footsteps
+  net/
+    signal.js       room codes, and the handshake carried over a free public topic
+    peer.js         one WebRTC connection: two channels, reliable and not
+    room.js         the star: one host, up to three joiners, and the relay between
+    session.js      a run with other people in it — roster, snapshots, downs, the hunt
 tests/
   run-tests.mjs     the headless harness
   stubs.mjs         just enough Three.js, canvas and DOM to run in node
@@ -219,7 +349,7 @@ map, player, enemy and items can be driven headlessly:
 node tests/run-tests.mjs
 ```
 
-160 assertions over seeds, generated layouts, line of sight, pathfinding,
+251 assertions over seeds, generated layouts, line of sight, pathfinding,
 collision clearance, the stealth arithmetic, the offering, the lantaarntje's
 rate curve, the soundtrack's files and its silence when there is no audio
 context, and a soak that runs the real update loop for 150 simulated seconds on
@@ -227,7 +357,19 @@ eight unseen ships to catch a patrol waypoint that would wedge him against a
 crate. No dependencies; node 22
 or newer, which detects the ES modules without a `package.json`.
 
-### Four invariants worth knowing
+Multiplayer is tested the same way, and it is worth knowing how: there is no
+WebRTC in the harness, but everything above the transport is the code that
+ships. Two `NetSession`s hand each other deep-copied JSON through a pair of
+loopback objects, each driving its own `SteamboatMap`, `GeilEnemy`,
+`ItemManager` and `TributeAltar` through the same update loop `main.js` runs.
+A whole run is played out that way — two browsers dealing the same ship from
+one seed, a pakje torn open on one machine and counted on both, somebody taken
+down and hauled back up, the offering made by whoever is standing at the altar,
+and a hunt where one player's body *is* Mr. Geil. Deep-copying is deliberate: a
+bug where one browser holds a reference into another one's state shows up as a
+failing check rather than as a run that only works on one machine.
+
+### Five invariants worth knowing
 
 - **Every walkable cell centre must be standable by a body of radius 0.5, and
   every crossing between two of them must be walkable.** Pathfinding hops from
@@ -244,13 +386,26 @@ or newer, which detects the ES modules without a `package.json`.
   and run the harness before believing the result.
 - **Sneak must not be bound to `Ctrl`.** `Ctrl`+`W` closes the tab and the page
   never sees the event.
+- **The seed is the ship, so the ship is never sent.** `generateRunLayout` is
+  pure in its `Rng`, and `ItemManager` draws the pillow order from the same
+  generator immediately after it. Four browsers handed one seed therefore deal
+  one boat. Put a `Math.random()` anywhere along that path — a tiebreak in
+  `drawSpread`, a shuffle in `buildPresents` — and multiplayer does not throw:
+  it quietly gives two players different ships, and the pakje one of them opens
+  is a different pillow on the other's screen. Anything that must differ between
+  two runs of the same ship (flicker, footstep timing, his look-around pauses)
+  stays on `Math.random`; anything a player can see the position of comes off
+  the seed. `crew: one seed, one ship` in the harness is the guard.
+
 - **The torch is dimmed, never hidden.** Setting `visible = false` on a
   shadow-casting light takes it out of the renderer's lighting state, which
   changes the program cache key, which recompiles every material in the scene.
   Measured on r128 in this ship that is a 91 ms frame — six dropped — on a key
   the player presses all run. `setFlashlight` moves `intensity` between 0 and
   `TORCH_INTENSITY` and parks `shadow.autoUpdate` instead, and the same frame
-  costs 0.1 ms. Anything that adds or drops a light mid-run pays that price.
+  costs 0.1 ms. Anything that adds or drops a light mid-run pays that price —
+  which is why every crewmate's torch in `crew.js` is built empty in the lobby,
+  before anybody is playing, and only ever dimmed afterwards.
 
 ---
 

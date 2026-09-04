@@ -10,37 +10,66 @@
 
 import { horrorAudio } from './audio.js';
 
-const EYE_HEIGHT = 1.62;
-const CROUCH_HEIGHT = 1.05;
-const HIDDEN_HEIGHT = 0.85;
-
-const SPEED = { sneak: 1.7, walk: 3.5, sprint: 6.2 };
 // Full beam. The torch is dimmed to nothing rather than switched off, so this
 // is the only place the lit value lives.
 const TORCH_INTENSITY = 3.4;
-// How far each gait carries in open air. Walls cut this roughly in half.
-const NOISE_RADIUS = { still: 0, sneak: 3.5, walk: 13, sprint: 26 };
+
+// Two bodies, one controller.
+//
+// `survivor` is the game as it was and as it is played alone: the numbers
+// below are the stealth dial the whole run turns on.
+//
+// `geil` is what the controller becomes when a person is playing Mr. Geil in
+// a hunt. The shape of it is deliberate. He walks faster than you walk and
+// slower than you sprint, so a survivor who spots him early can break away —
+// but only for the four seconds their breath lasts, and only into cover,
+// because he never has to stop. His sprint is a lunge: two and a half seconds
+// of it, and then nothing at all until it has come all the way back, which
+// makes reaching for somebody a decision rather than a habit.
+export const PROFILES = {
+  survivor: {
+    eye: 1.62, crouch: 1.05, hidden: 0.85, down: 0.5,
+    speed: { sneak: 1.7, walk: 3.5, sprint: 6.2 },
+    // How far each gait carries in open air. Walls cut this roughly in half.
+    noise: { still: 0, sneak: 3.5, walk: 13, sprint: 26 },
+    // ready: how much breath it takes to be allowed to run again.
+    stamina: { max: 100, drain: 24, regen: 16, ready: 35 },
+    torch: true, canHide: true, radius: 0.42
+  },
+  geil: {
+    eye: 1.94, crouch: 1.30, hidden: 1.30, down: 1.30,
+    speed: { sneak: 2.2, walk: 4.35, sprint: 6.5 },
+    // Heavier boots, and no crate to muffle them. Going quiet costs him most
+    // of his speed, which is the only reason a survivor ever gets a warning.
+    noise: { still: 0, sneak: 2.5, walk: 15, sprint: 30 },
+    stamina: { max: 100, drain: 38, regen: 11, ready: 100 },
+    torch: false, canHide: false, radius: 0.5
+  }
+};
 
 export class Player {
-  constructor(camera, map, domElement, settings) {
+  constructor(camera, map, domElement, settings, profile = 'survivor') {
     this.camera = camera;
     this.map = map;
     this.domElement = domElement;
     this.settings = settings;
 
+    this.profileName = PROFILES[profile] ? profile : 'survivor';
+    this.profile = PROFILES[this.profileName];
+
     this.x = map.playerStart.x;
     this.z = map.playerStart.z;
-    this.y = EYE_HEIGHT;
+    this.y = this.profile.eye;
     this.yaw = -Math.PI / 2;
     this.pitch = 0;
 
     this.turnSpeed = 3.1;
-    this.collisionRadius = 0.42;
+    this.collisionRadius = this.profile.radius;
 
-    this.maxStamina = 100;
+    this.maxStamina = this.profile.stamina.max;
     this.stamina = this.maxStamina;
-    this.staminaDrain = 24;
-    this.staminaRegen = 16;
+    this.staminaDrain = this.profile.stamina.drain;
+    this.staminaRegen = this.profile.stamina.regen;
     this.regenDelay = 0;
     this.exhausted = false;
 
@@ -57,6 +86,9 @@ export class Player {
 
     this.enabled = false;
     this.pointerLocked = false;
+    // On the deck with him standing over you: the head still turns, the body
+    // does not. Not the same as disabled, which would take the view away too.
+    this.frozen = false;
 
     this.keys = {
       forward: false, backward: false,
@@ -124,7 +156,33 @@ export class Player {
   }
 
   toggleFlashlight() {
+    // He does not carry one, and a beam swinging out of his own eyes would
+    // hand the ship to whoever is hiding in it.
+    if (!this.profile.torch) return;
     this.setFlashlight(!this.flashlightOn);
+  }
+
+  // Swap which body this controller is driving. The camera height, the gait
+  // table, the breath and the collision radius all come from the profile, so
+  // becoming Mr. Geil is one call and a reset.
+  setProfile(name) {
+    const next = PROFILES[name] || PROFILES.survivor;
+    this.profileName = PROFILES[name] ? name : 'survivor';
+    if (next === this.profile) return;
+
+    this.profile = next;
+    this.maxStamina = next.stamina.max;
+    this.stamina = this.maxStamina;
+    this.staminaDrain = next.stamina.drain;
+    this.staminaRegen = next.stamina.regen;
+    this.exhausted = false;
+    this.regenDelay = 0;
+    this.collisionRadius = next.radius;
+    if (this.flashlightOn) this.setFlashlight(false, true);
+    this.isHidden = false;
+    this.hideSpot = null;
+    this.y = next.eye;
+    this.syncCamera();
   }
 
   // --- Input -----------------------------------------------------------
@@ -250,10 +308,29 @@ export class Player {
     if (!on) this.releaseAllKeys();
   }
 
+  setFrozen(on) {
+    if (this.frozen === on) return;
+    this.frozen = on;
+    if (on) {
+      this.releaseAllKeys();
+      this.isHidden = false;
+      this.hideSpot = null;
+      if (this.flashlightOn) this.setFlashlight(false, true);
+    }
+  }
+
   // --- Simulation ------------------------------------------------------
 
   update(delta) {
     this.oneShotNoise = 0;
+
+    if (this.frozen) {
+      this.gait = 'still';
+      this.speed = 0;
+      this.bobTimer += delta * 1.1;
+      this.syncCamera(delta);
+      return;
+    }
 
     if (this.isHidden) {
       this.updateHidden(delta);
@@ -272,7 +349,7 @@ export class Player {
 
     const isMoving = moveZ !== 0 || moveX !== 0;
     this.gait = this.resolveGait(isMoving, delta);
-    this.speed = isMoving ? SPEED[this.gait] || 0 : 0;
+    this.speed = isMoving ? this.profile.speed[this.gait] || 0 : 0;
 
     if (isMoving) {
       // Normalise so diagonals aren't faster.
@@ -336,8 +413,9 @@ export class Player {
       return;
     }
     this.stamina = Math.min(this.maxStamina, this.stamina + this.staminaRegen * delta);
-    // Have to catch your breath properly before sprinting again.
-    if (this.exhausted && this.stamina > 35) this.exhausted = false;
+    // Have to catch your breath properly before sprinting again. Mr. Geil has
+    // to get all of it back, which is what makes his lunge a commitment.
+    if (this.exhausted && this.stamina >= this.profile.stamina.ready) this.exhausted = false;
   }
 
   updateHidden(delta) {
@@ -355,17 +433,19 @@ export class Player {
   }
 
   syncCamera(delta = 0) {
-    const targetHeight = this.isHidden ? HIDDEN_HEIGHT
-      : this.keys.sneak ? CROUCH_HEIGHT
-        : EYE_HEIGHT;
+    const targetHeight = this.frozen ? this.profile.down
+      : this.isHidden ? this.profile.hidden
+        : this.keys.sneak ? this.profile.crouch
+          : this.profile.eye;
     // Ease between stances instead of snapping.
     this.y += (targetHeight - this.y) * Math.min(1, delta * 9);
 
-    const bobAmount = this.isHidden ? 0.012
-      : this.gait === 'sprint' ? 0.052
-        : this.gait === 'walk' ? 0.034
-          : this.gait === 'sneak' ? 0.016
-            : 0.006;
+    const bobAmount = this.frozen ? 0.02
+      : this.isHidden ? 0.012
+        : this.gait === 'sprint' ? 0.052
+          : this.gait === 'walk' ? 0.034
+            : this.gait === 'sneak' ? 0.016
+              : 0.006;
     const bobY = Math.sin(this.bobTimer) * bobAmount;
     const bobX = Math.cos(this.bobTimer * 0.5) * bobAmount * 0.6;
 
@@ -388,7 +468,7 @@ export class Player {
   // Radius at which Mr. Geil can hear this frame's movement.
   getNoiseRadius() {
     if (this.isHidden) return 0;
-    return Math.max(NOISE_RADIUS[this.gait] || 0, this.oneShotNoise);
+    return Math.max(this.profile.noise[this.gait] || 0, this.oneShotNoise);
   }
 
   // A distinct, loud, one-frame sound: tearing paper, a dropped lid.
@@ -412,12 +492,14 @@ export class Player {
   }
 
   canHideAt(spot) {
+    if (!this.profile.canHide) return false;
     const dx = spot.x - this.x;
     const dz = spot.z - this.z;
     return dx * dx + dz * dz < 2.4 * 2.4;
   }
 
   enterHiding(spot) {
+    if (!this.profile.canHide) return;
     this.isHidden = true;
     this.hideSpot = spot;
     this.releaseAllKeys();
@@ -446,9 +528,12 @@ export class Player {
     this.syncCamera();
   }
 
-  reset() {
-    this.setPosition(this.map.playerStart.x, this.map.playerStart.z);
-    this.y = EYE_HEIGHT;
+  // `at` is where this body wakes up; left out, it is the authored start, the
+  // way single player has always done it.
+  reset(at = null) {
+    const spot = at || this.map.playerStart;
+    this.setPosition(spot.x, spot.z);
+    this.y = this.profile.eye;
     this.yaw = -Math.PI / 2;
     this.pitch = 0;
     this.stamina = this.maxStamina;
@@ -456,6 +541,7 @@ export class Player {
     this.regenDelay = 0;
     this.isHidden = false;
     this.hideSpot = null;
+    this.frozen = false;
     this.gait = 'still';
     this.bobTimer = 0;
     this.setFlashlight(false, true);
