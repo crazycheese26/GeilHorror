@@ -175,13 +175,40 @@ go through a **relay** (a TURN server), and the lobby says so plainly rather
 than sitting on "opening a line" — along with one line of detail about what ICE
 actually managed, which is the thing worth pasting into a bug report.
 
-Open **Trouble connecting?** in the lobby and paste one in. **Only one of you
+**Trouble connecting?** in the lobby has a **Test my connection** button, and
+it is the first thing to press when something does not work. It runs in one
+browser, on its own, without needing anybody at the other end, and it separates
+the four things that all look like the same stuck spinner:
+
+```
+·  Page version     2026-09-04 · net 3
+✓  Secure context   yes — https://crazycheese26.github.io
+✓  WebRTC           available
+✓  Lobby service    reachable, 118 ms round trip
+✓  Addresses found  host 2, srflx 2, relay 0 in 87 ms
+✓  Data channel     opened in 22 ms
+·  Relay            none set
+```
+
+- **Page version** is there because a browser holding a cached copy of the game
+  is the most common reason a fix appears not to have worked. If two people
+  disagree here, one of them needs a hard reload.
+- **Addresses found** with `srflx 0` means the network is blocking STUN and this
+  browser cannot tell anybody how to reach it.
+- **Data channel** passing while a real run still fails means both browsers are
+  fine and the problem is between the two of you — which is the relay case.
+
+**Copy report** puts the whole thing on the clipboard, with the relay password
+masked, for pasting at whoever is helping.
+
+Open **Trouble connecting?** in the lobby and paste a relay in. **Only one of you
 needs it**; a relay allocated by either side works for both. Free tiers exist
 and none of them is a server you run:
 
 | | |
 | --- | --- |
 | **Metered** | [metered.ca/tools/openrelay](https://www.metered.ca/tools/openrelay/) — free account, 50 GB a month, gives you a host, username and password straight away |
+| **Twilio** | free trial credit, and a relay in every region |
 | **Cloudflare** | Cloudflare Calls TURN — free tier, needs a Cloudflare account |
 | **Your own** | `coturn` on any box you already have |
 
@@ -195,12 +222,15 @@ turns:relay.example.com:5349?transport=tcp|username|password
 
 It is kept in `localStorage` with the rest of the settings, so it is typed once.
 
-A word on why there is no relay in the box already: there used to be a
-well-known free public one, and every project on the internet hardcoded it. It
-is gone. A **dead** TURN server is worse than none at all — ICE waits on it,
-gathering never finishes, and every connection pays a two-and-a-half second
-timeout before it can even start looking. So the default list is STUN only, and
-a relay is something you add when the lobby tells you that you need one.
+A word on why there is no relay in the box already. There used to be several
+free public ones with published credentials, and every hobby project on the
+internet hardcoded them; this game shipped with one too. They are all gone —
+`openrelay.metered.ca`, `turn.anyfirewall.com`, `freeturn.net` and the rest
+either refuse the allocation or no longer answer at all. And a **dead** TURN
+server is much worse than none: ICE waits on it, gathering never finishes, and
+every connection pays a two-and-a-half second timeout twice before it can even
+start looking. That was measured, and it is why the default list is STUN only
+and a relay is something you add when the lobby tells you that you need one.
 
 ### What else it cannot do
 

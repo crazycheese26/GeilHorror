@@ -16,8 +16,15 @@ import { NetSession, MODE, BLEED_SECONDS } from './net/session.js';
 import { CrewView } from './crew.js';
 import { makeRoomCode, normaliseCode, isValidCode } from './net/signal.js';
 import { setRelay } from './net/peer.js';
+import { runCheckup, checkupText } from './net/checkup.js';
 
 const SETTINGS_KEY = 'geil.settings.v1';
+
+// Stamped into the lobby's self-test. A browser holding a cached copy of the
+// game is the most common reason a fix appears not to have worked, and this is
+// the only way to tell from the outside. Bump it with anything that changes
+// how two browsers talk to each other.
+const BUILD = '2026-09-04 · net 3';
 
 // Sinterklaas, on deck, explaining the job. He is the reason there is an altar
 // in het ruim at all: the offering is his idea, not yours.
@@ -214,6 +221,8 @@ class Game {
       lobbyDetail: $('lobby-detail'),
       relay: $('set-relay'),
       relayState: $('relay-state'),
+      checkup: $('checkup'),
+      checkupCopy: $('btn-checkup-copy'),
       launch: $('btn-launch'),
       roomCodes: document.querySelectorAll('[data-room-code]'),
       crewPanel: $('crew-panel'),
@@ -357,6 +366,8 @@ class Game {
     on('btn-copy', 'click', () => this.copyInvite());
     on('btn-launch', 'click', () => this.launchCrewRun());
     on('btn-lobby-back', 'click', () => this.leaveLobby());
+    on('btn-checkup', 'click', () => this.runCheckup());
+    on('btn-checkup-copy', 'click', () => this.copyCheckup());
     on('btn-crew-again', 'click', () => this.crewBackToLobby());
     on('btn-crew-leave', 'click', () => this.toMenu());
     on('btn-intro-next', 'click', () => this.advanceIntro());
@@ -944,6 +955,75 @@ class Game {
   // message rather than in a console nobody has open.
   setNetDetail(text) {
     if (this.dom.lobbyDetail) this.dom.lobbyDetail.textContent = text || '';
+  }
+
+  // --- Self-test ---------------------------------------------------------
+
+  async runCheckup() {
+    const list = this.dom.checkup;
+    if (!list) return;
+
+    const button = document.getElementById('btn-checkup');
+    if (button) {
+      button.disabled = true;
+      button.textContent = 'Testing…';
+    }
+    this.reveal(this.dom.checkupCopy, false);
+    list.innerHTML = '';
+    this.paintCheckup([{ name: 'Working', ok: null, detail: 'this takes a few seconds…' }]);
+
+    let checks;
+    try {
+      checks = await runCheckup(BUILD, this.settings.relay);
+    } catch (err) {
+      checks = [{ name: 'Self-test', ok: false, detail: String(err && err.message || err) }];
+    }
+
+    this.lastCheckup = checks;
+    this.paintCheckup(checks);
+    this.reveal(this.dom.checkupCopy, true);
+    if (button) {
+      button.disabled = false;
+      button.textContent = 'Test again';
+    }
+  }
+
+  paintCheckup(checks) {
+    const list = this.dom.checkup;
+    if (!list) return;
+    list.innerHTML = '';
+
+    for (const check of checks) {
+      const row = document.createElement('li');
+      row.classList.toggle('is-ok', check.ok === true);
+      row.classList.toggle('is-bad', check.ok === false);
+
+      const mark = document.createElement('span');
+      mark.className = 'mark';
+      mark.textContent = check.ok === true ? '✓' : check.ok === false ? '✕' : '·';
+
+      const what = document.createElement('span');
+      what.className = 'what';
+      what.textContent = check.name;
+
+      const said = document.createElement('span');
+      said.className = 'said';
+      said.textContent = check.detail;
+
+      row.append(mark, what, said);
+      list.appendChild(row);
+    }
+  }
+
+  copyCheckup() {
+    if (!this.lastCheckup) return;
+    const text = checkupText(this.lastCheckup);
+    const done = () => this.setNetStatus('Report copied. Paste it wherever you are asking.');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => this.setNetDetail(text));
+    } else {
+      this.setNetDetail(text);
+    }
   }
 
   // A relay only ever affects connections made after it is set, which is fine:

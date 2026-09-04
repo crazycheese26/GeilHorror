@@ -763,6 +763,34 @@ body[data-role="hunter"] #stamina .hud-label::after { content: " — lunge"; }
 /* The one-line technical account of a connection that did not happen. Small,
    monospaced and selectable, because its whole job is to be pasted at
    somebody who can read it. */
+.checkup-row { display: flex; gap: 8px; margin: 12px 0 10px; }
+
+.checkup {
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.55;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.checkup:empty { display: none; }
+.checkup li {
+  display: grid;
+  grid-template-columns: 13px minmax(88px, max-content) 1fr;
+  gap: 10px;
+  align-items: baseline;
+  color: var(--dim);
+}
+.checkup .mark { color: var(--dim); }
+.checkup li.is-ok .mark { color: var(--amber); }
+.checkup li.is-bad .mark { color: var(--blood); }
+.checkup li.is-bad .what { color: var(--blood); }
+.checkup .what { color: var(--bone); letter-spacing: 0.06em; }
+.checkup .said { opacity: 0.85; }
+
 .lobby-detail {
   margin: -14px 0 18px;
   font-family: var(--mono);

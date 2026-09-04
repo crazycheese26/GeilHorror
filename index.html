@@ -298,6 +298,18 @@
                  autocomplete="off" placeholder="turn:host:3478|username|password"
                  aria-label="Relay server">
           <p class="field-hint" id="relay-state"></p>
+
+          <div class="checkup-row">
+            <button id="btn-checkup" class="btn btn-mini" type="button">Test my connection</button>
+            <button id="btn-checkup-copy" class="btn btn-mini is-hidden" type="button">Copy report</button>
+          </div>
+          <p class="field-hint">
+            Runs on its own, here, without needing anybody at the other end. It
+            says whether this browser can do it at all, whether your network lets
+            it, and — first of all — whether you are looking at the current
+            version of the page.
+          </p>
+          <ul id="checkup" class="checkup"></ul>
         </details>
 
         <p id="lobby-status" class="lobby-status"></p>
